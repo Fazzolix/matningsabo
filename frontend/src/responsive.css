@@ -1,0 +1,152 @@
+/* Responsive Global Styles */
+
+/* Mobile-first approach */
+html {
+    font-size: 16px;
+    -webkit-text-size-adjust: 100%;
+    -ms-text-size-adjust: 100%;
+}
+
+body {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overscroll-behavior-y: none;
+}
+
+/* Prevent horizontal scroll on mobile */
+#root {
+    overflow-x: hidden;
+    position: relative;
+    min-height: 100vh;
+}
+
+/* Touch-friendly tap targets */
+button, a, input, select, textarea {
+    min-height: 44px;
+    min-width: 44px;
+}
+
+/* Responsive typography scale */
+@media (max-width: 599px) {
+    html {
+        font-size: 14px;
+    }
+}
+
+@media (min-width: 600px) and (max-width: 959px) {
+    html {
+        font-size: 15px;
+    }
+}
+
+@media (min-width: 960px) {
+    html {
+        font-size: 16px;
+    }
+}
+
+/* Responsive images */
+img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+}
+
+/* Responsive tables - make them scrollable on mobile */
+.table-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+table {
+    min-width: 100%;
+}
+
+/* Mobile-specific utility classes */
+@media (max-width: 599px) {
+    .hide-on-mobile {
+        display: none !important;
+    }
+    
+    /* Full-width buttons on mobile */
+    .MuiButton-root {
+        min-width: 100%;
+    }
+    
+    /* Stack form fields on mobile */
+    .MuiGrid-container {
+        margin: 0 !important;
+    }
+    
+    /* Reduce padding on mobile */
+    .MuiContainer-root {
+        padding-left: 16px !important;
+        padding-right: 16px !important;
+    }
+}
+
+/* Tablet-specific styles */
+@media (min-width: 600px) and (max-width: 959px) {
+    .hide-on-tablet {
+        display: none !important;
+    }
+}
+
+/* Desktop-specific styles */
+@media (min-width: 960px) {
+    .show-on-mobile-only {
+        display: none !important;
+    }
+}
+
+/* Responsive chart container */
+.chart-container {
+    position: relative;
+    height: auto;
+    width: 100%;
+}
+
+@media (max-width: 599px) {
+    .chart-container {
+        height: 250px;
+    }
+}
+
+@media (min-width: 600px) and (max-width: 959px) {
+    .chart-container {
+        height: 350px;
+    }
+}
+
+@media (min-width: 960px) {
+    .chart-container {
+        height: 400px;
+    }
+}
+
+/* Landscape mode adjustments for mobile */
+@media (max-width: 959px) and (orientation: landscape) {
+    .MuiAppBar-root {
+        position: fixed !important;
+    }
+    
+    main {
+        padding-top: 64px;
+    }
+}
+
+/* Print styles */
+@media print {
+    .no-print {
+        display: none !important;
+    }
+    
+    body {
+        font-size: 12pt;
+    }
+    
+    .MuiAppBar-root,
+    .MuiDrawer-root {
+        display: none !important;
+    }
+}

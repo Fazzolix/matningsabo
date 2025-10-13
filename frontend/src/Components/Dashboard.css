@@ -1,0 +1,115 @@
+.dashboard-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.filters-card {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    align-items: center;
+    padding: 1.5rem;
+}
+
+.filter-item.date-filter {
+    display: flex;
+    flex-direction: column;
+}
+.filter-item.date-filter label {
+    margin-bottom: 0.5rem;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+.filter-item.date-filter input {
+    padding: 0.85rem;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+
+.kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1.5rem;
+}
+
+.stat-card {
+    display: flex;
+    align-items: center;
+    background-color: var(--background);
+    padding: 1.5rem;
+    border-radius: 8px;
+    border-left: 5px solid;
+    box-shadow: var(--shadow-sm);
+}
+
+.stat-card-icon {
+    font-size: 1.5rem;
+    color: white;
+    border-radius: 50%;
+    width: 50px;
+    height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 1rem;
+}
+
+.stat-card-info {
+    display: flex;
+    flex-direction: column;
+}
+
+.stat-card-title {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    margin-bottom: 0.25rem;
+}
+
+.stat-card-value {
+    color: var(--text-primary);
+    font-size: 1.75rem;
+    font-weight: 600;
+}
+
+.charts-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+}
+
+.chart-card {
+    padding: 1.5rem;
+}
+
+.chart-card h3 {
+    margin-top: 0;
+    text-align: center;
+    margin-bottom: 1.5rem;
+}
+
+/* Header row with title + action button */
+.chart-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+/* Avoid center alignment when using custom header row */
+.chart-card-header h3 {
+    margin: 0;
+    text-align: left;
+}
+
+.chart-card.full-width {
+    grid-column: 1 / -1;
+}
+
+/* Recharts custom styles */
+.recharts-legend-item {
+    margin-right: 10px !important;
+}
+.recharts-label {
+    font-size: 0.9rem;
+}

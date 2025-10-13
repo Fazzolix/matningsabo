@@ -1,0 +1,8 @@
+.fullscreen-loader {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    font-size: 1.2rem;
+    color: var(--text-secondary);
+}

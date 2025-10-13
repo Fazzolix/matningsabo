@@ -1,0 +1,89 @@
+# Git
+**/.git
+.gitignore
+
+# Python
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.Python
+**/env/
+**/venv/
+**/.venv
+pip-log.txt
+pip-delete-this-directory.txt
+**/.pytest_cache/
+**/htmlcov/
+**/.coverage
+**/.coverage.*
+**/coverage.xml
+**/*.cover
+
+# Node
+**/node_modules/
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+
+# Environment files
+**/.env
+**/.env.local
+**/.env.*.local
+**/*.env
+
+# IDE
+**/.vscode/
+**/.idea/
+**/*.swp
+**/*.swo
+**/*~
+
+# OS
+**/.DS_Store
+**/Thumbs.db
+
+# Project specific
+**/*.log
+**/*.pid
+**/*.seed
+**/*.pid.lock
+**/.cache
+**/.parcel-cache
+
+# Build artifacts (except frontend build which we need)
+**/dist/
+**/*.egg-info/
+
+# Testing
+**/.pytest_cache/
+**/.tox/
+
+# Documentation
+**/docs/
+SECURITY_RECOMMENDATIONS.md
+auth_utils_secure.py
+validators.py
+simple_rate_limiter.py
+security_headers.py
+app_secure_example.py
+requirements_secure.txt
+
+# Temporary files
+**/tmp/
+**/temp/
+**/*.tmp
+**/*.temp
+
+# Secrets
+**/*.key
+**/*.pem
+**/*.crt
+**/*.p12
+**/secrets/
+**/credentials/
+
+# Backup files
+**/*.bak
+**/*.backup
+**/*_old.py

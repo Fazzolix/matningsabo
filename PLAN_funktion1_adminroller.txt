@@ -1,0 +1,122 @@
+Plan – Funktion 1: Begränsa admin‑delen med roller (Superadmin/Admin)
+
+Mål
+- Begränsa adminvyer och skrivande API:er till specifika användare.
+- Enkel bootstrap via miljövariabel för första superadmin.
+- Superadmin kan ge/ta bort admin‑roll till befintliga inloggade användare.
+- Produktionsklart: auditlogg, ratelimit, tydlig rollkontroll, robust datamodell.
+
+Roller och behörighet
+- Superadmin: Bestäms av miljövariabeln SUPERADMIN_EMAIL (fallback/”break‑glass”). Har alla rättigheter, inklusive att ändra admin‑roller.
+- Admin: Utses av superadmin. Kan använda adminflikar och skapa/ändra “aktiviteter” och “träffpunkter”. Kan inte ändra roller.
+- Övriga: Endast läsare/ordinarie användare, ingen åtkomst till admin.
+
+Firestore – Datamodell
+- Top‑level collections (för att undvika reserverade doc‑ID):
+  - `Users_traffpunkt` (userprofiler/roller):
+    - DocID: Azure AD `oid` (stabil identifierare).
+    - Fält: `email`, `display_name`, `roles: { admin: bool }`, `created_at`, `last_login_at`, `id` (oid).
+  - `Admin_audit_traffpunkt` (auditlogg för rolländringar):
+    - Fält: `action` ('grant_admin'|'revoke_admin'), `actor_oid`, `actor_email`, `target_oid`, `target_email`, `ts`, `request_id`.
+  - Indexer: Initialt ej nödvändiga.
+
+Backend – Konfiguration och auth-flöde
+- Miljövariabler (.env/Cloud Run):
+  - `SUPERADMIN_EMAIL` (obligatorisk i prod)
+  - Befintliga: `SECRET_KEY`, `FRONTEND_URL`, Azure‑ID:n, `GOOGLE_APPLICATION_CREDENTIALS`.
+- Auth/registrering vid varje verifierad request (nuvarande Azure AD flow):
+  - Extrahera `oid`, `email`, `name` från token.
+  - Upsert i `Users_traffpunkt`: skapa om saknas (sätt `created_at`), uppdatera `last_login_at` och `email`/`display_name`.
+  - Email normaliseras till lowercase.
+
+Backend – Behörighetskontroller
+- Lägg till två dekoratörer i auth‑lagret (t.ex. i `auth_utils.py` eller nytt `auth_roles.py`):
+  - `require_superadmin`: Tillåter endast requests där `email == SUPERADMIN_EMAIL`.
+  - `require_admin`: Tillåter `email == SUPERADMIN_EMAIL` ELLER `Users_traffpunkt/{oid}.roles.admin == true`.
+- Applicera `require_admin` på alla endpoints som skapar/ändrar aktiviteter/träffpunkter.
+
+Backend – Nya API‑endpoints
+- GET `/api/me` (om den finns, utöka):
+  - Svar: `{ email, display_name, is_superadmin, is_admin }`.
+  - Beräkning: `is_superadmin = (email == SUPERADMIN_EMAIL)`, `is_admin = is_superadmin || roles.admin`.
+- GET `/api/admin/users` (endast superadmin):
+  - Källa: listar från `Users_traffpunkt`.
+  - Query: `q` (valfri substring‑sök på email), `limit` (default 200, max 500).
+  - Svar: lista av `{ id: oid, email, display_name, roles: { admin }, created_at, last_login_at }`.
+  - Ratelimit och pagination vid behov.
+- PUT `/api/admin/users/:user_id/role` (endast superadmin):
+  - Body: `{ admin: true|false }`.
+  - Effekter: Uppdatera `Users_traffpunkt/{oid}.roles.admin` + skriv auditlogg i `Admin_audit_traffpunkt`.
+  - Validering: `user_id` måste existera. Förbjud förändring av superadminstatus (styrd av env). Idempotent.
+
+Backend – Säkerhet och robusthet
+- Ratelimit: återanvänd `security.py` limiter. Lägre budgets på admin‑endpoints.
+- Säkerhetsheaders: fortsätt via befintlig middleware.
+- Inputvalidering: `validators.py` (emailformat, bool för admin, längder på `q`).
+- Logging: strukturera loggar med request‑id. Auditlogg per rolländring i `Admin_audit_traffpunkt`.
+
+Frontend – UI och logik
+- Visning av adminflik:
+  - Hämta `/api/me` vid sessionstart (befintlig authflow).
+  - Visa Admin‑navigering och sidor när `is_admin || is_superadmin`.
+- Ny sida: “Rollhantering” (endast superadmin):
+  - Lista användare från `/api/admin/users` (sökfält på email, paginering vid behov).
+  - Checkbox per användare för `admin`. Spara via `PUT /api/admin/users/:id/role`.
+  - UI‑feedback: loading, felhantering, bekräftelse. Optimistisk uppdatering eller disable under sparning.
+- Befintliga adminfunktioner (aktiviteter/träffpunkter):
+  - Låt dessa förbli, men kräva `is_admin || is_superadmin` för att rendera/agera.
+
+Befintliga flöden (oförändrade)
+- Statistik: Publika/läsande vyer och API:er fortsätter vara öppna som idag.
+- Registrering: Vanliga inloggade användare kan fortsatt registrera enligt nuvarande flöden. Rollkontrollen påverkar endast admin‑UI och skrivande admin‑endpoints.
+- Ingen åtstramning införs på endpoints som idag är öppna för alla.
+
+Migrering och bootstrap
+- Lägg till `SUPERADMIN_EMAIL` i `.env` (lokalt) och i Cloud Run env.
+- Deploy backend. Låt superadmin logga in minst en gång (skapar user‑doc under `Users_traffpunkt`).
+- Övriga användare behöver logga in en gång för att synas i listan.
+- Superadmin öppnar Admin → Rollhantering och sätter adminrättigheter.
+
+Edge cases och policy
+- Email‑jämförelser alltid lowercase.
+- Identifiering sker på `oid`; email används för visning/sök. Email‑byte påverkar inte behörighet.
+- Ingen möjlighet att ge/tappa superadmin via UI (env styr). Dokumentera ”break‑glass”.
+- Transaktioner/merge: använd `set(..., merge=True)` eller transaktion för att undvika race vid rolluppdatering.
+- Felkoder: 400 (validering), 401/403 (auth/behörighet), 404 (okänd user_id), 429 (ratelimit).
+
+Acceptanskriterier
+- Endast superadmin ser och kan använda “Rollhantering”.
+- Endast admin/superadmin ser adminflikar och kan skapa/ändra aktiviteter/träffpunkter.
+- Vanliga användare kan fortsatt se statistik och registrera enligt dagens behörigheter.
+- Nyinloggad användare dyker upp i listan inom sekunder och kan göras till admin.
+- Auditloggar skrivs för varje rolländring med korrekt aktör/mål och tidsstämpel.
+- Alla admin‑endpoints skyddas av rätt dekoratör och följer ratelimit och säkerhetsheaders.
+
+API‑kontrakt (exempel)
+- GET `/api/me` → 200
+  {
+    "email": "user@example.com",
+    "display_name": "User Name",
+    "is_superadmin": false,
+    "is_admin": true
+  }
+- GET `/api/admin/users?q=anna&limit=50` → 200
+  [
+    { "id": "<oid>", "email": "anna@example.com", "display_name": "Anna Andersson", "roles": { "admin": true }, "created_at": 1700000000, "last_login_at": 1700500000 }
+  ]
+- PUT `/api/admin/users/<oid>/role` body `{ "admin": false }` → 200
+  { "id": "<oid>", "roles": { "admin": false } }
+
+Tekniskt genomförande – uppgiftslista
+1) Backend: lägg till `SUPERADMIN_EMAIL` i config och dekoratörer `require_admin`/`require_superadmin`.
+2) Backend: upsert av user i `Users_traffpunkt` vid verifierad request.
+3) Backend: utöka `/api/me` med rollflaggor.
+4) Backend: skapa `/api/admin/users` (sök + list från `Users_traffpunkt`) och `PUT /api/admin/users/:id/role` + auditlogg.
+5) Frontend: hämta rollflaggor, göm/visa adminflikar.
+6) Frontend: ny sida “Rollhantering” (lista, sök, toggla admin, fel/loader).
+7) Säkerhet: ratelimit, validering, loggning; manuell QA av flöden (inkl. att icke‑admins fortsatt kan se statistik/regga).
+8) Dokumentation: README/ENV uppdateras med `SUPERADMIN_EMAIL` och driftsteg.
+
+Drift och övervakning
+- Logga alla 4xx/5xx samt audit‑events. Instrumentera med request‑id.
+- Larm/alerts på 5xx‑spikar i Cloud Run. Enkla dashboardfilter på admin‑endpoints.

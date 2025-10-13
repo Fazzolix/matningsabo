@@ -1,0 +1,119 @@
+.registration-container {
+    max-width: 500px;
+    margin: 2rem auto;
+    padding: 2rem;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.registration-container h2 {
+    text-align: center;
+    margin-bottom: 1.5rem;
+    color: #333;
+}
+
+.registration-container form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.registration-top-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.registration-top-row .form-group {
+    flex: 1;
+}
+
+.activity-row .form-group,
+.checkbox-row {
+    width: 100%;
+}
+
+.activity-row input[type="text"] {
+    width: 100%;
+    box-sizing: border-box; /* To include padding and border in the element's total width */
+}
+
+.checkbox-row .checkbox-group {
+    display: flex;
+    justify-content: space-around;
+    padding: 0.75rem;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+
+.registration-container .form-group {
+    display: flex;
+    flex-direction: column;
+}
+
+.registration-container label {
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+    color: #555;
+}
+
+.registration-container input[type="text"],
+.registration-container input[type="date"],
+.registration-container select {
+    padding: 0.75rem;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 1rem;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.registration-container .checkbox-group label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: normal;
+}
+
+.registration-container button {
+    padding: 0.75rem;
+    border: none;
+    border-radius: 4px;
+    background-color: #007bff;
+    color: white;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+.registration-container button:hover {
+    background-color: #0056b3;
+}
+
+.registration-container p {
+    text-align: center;
+    margin-top: 1rem;
+    color: #28a745;
+}
+
+.registration-container button[type="button"] {
+    background-color: #6c757d;
+}
+
+.registration-container button[type="button"]:hover {
+    background-color: #5a6268;
+}
+
+/* Mobile responsiveness */
+@media (max-width: 768px) {
+    .registration-top-row {
+        flex-direction: column;
+    }
+
+    .checkbox-row .checkbox-group {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 1rem;
+    }
+}
