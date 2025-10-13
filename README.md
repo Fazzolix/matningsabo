@@ -16,7 +16,7 @@ Digital plattform för insamling och visualisering av besöksstatistik från kom
 ### Förutsättningar
 - Node.js (v18+)
 - Python (3.11+)
-- Google Cloud projekt med Firestore
+- Azure‑konto (Container Apps + Cosmos DB)
 - Azure AD app-registrering
 
 ### Installation
@@ -67,9 +67,9 @@ npm start
 
 - **Frontend**: React, Material‑UI, MSAL (redirect‑flow, BrowserRouter)
 - **Backend**: Flask, Gunicorn, Flask-Session
-- **Databas**: Google Firestore
+- **Databas**: Azure Cosmos DB (NoSQL/SQL‑API)
 - **Autentisering**: Azure AD
-- **Hosting**: Google Cloud Run
+- **Hosting**: Azure Container Apps
 
 ## 📊 Datamodell
 
@@ -99,9 +99,9 @@ npm start
 ## 🔐 Säkerhet
 
 - Azure AD‑autentisering (redirect‑flöde) krävs för all åtkomst
-- Sessionscookies med HttpOnly och Secure flags
+- Cookie‑baserade, signerade sessioner (HttpOnly + Secure + SameSite=Lax); stödjer flera repliker utan delad lagring
 - CORS konfigurerat för produktions-URL
-- Firestore-åtkomst via Google IAM
+- Cosmos‑åtkomst via konto‑nyckel (lagras som hemlighet i Container Apps)
 - Rollkontroll i backend: `require_admin` skyddar skriv‑endpoints för aktiviteter/träffpunkter, `require_superadmin` skyddar admin‑API för rollhantering
 - Ratelimits på API, striktare på admin‑endpoints
 
@@ -250,25 +250,23 @@ Tidigare deployment till Google Cloud Run (behåll tills Azure‑miljön är ver
 
 ---
 
-## Firestore Initial Data
+## Initial Data (Cosmos DB)
 
-To get the application running, you can add some initial `traffpunkter` (meeting points) via the Admin page in the app. Alternatively, you can add them manually in the Firestore console.
+För att komma igång kan du lägga till några initiala `traffpunkter` via Admin‑sidan i appen. Alternativt kan du skapa dem direkt i Cosmos DB.
 
-### `traffpunkter` collection
+### Container `traffpunkter`
 
-The application provides an Admin page (`/admin`) to add and manage meeting points dynamically.
+Appen tillhandahåller en Admin‑sida (`/admin`) för att lägga till och hantera träffpunkter dynamiskt.
 
-If you prefer to add them manually, create a document for each meeting point. The document ID should be a URL-friendly version of the name (e.g., "bagaren").
+Om du vill skapa dem manuellt i Cosmos (NoSQL): lägg till ett dokument per träffpunkt i containern `traffpunkter`. Dokumentets `id` ska vara en URL‑vänlig version av namnet (t.ex. `bagaren`).
 
-**Example Document:**
-- **ID:** `bagaren`
-- **Fields:**
-    - `name` (String): "Bagaren"
-    - `id` (String): "bagaren"
-    - `active` (Boolean): `true`
-    - `address` (String): ""
-    - `description` (String): ""
-    - `created_at` (Timestamp): Current time
+Exempel:
+- `id`: `bagaren`
+- `name`: "Bagaren"
+- `active`: `true`
+- `address`: ""
+- `description`: ""
+- `created_at`: ISO‑sträng, t.ex. `2025-01-01T12:00:00Z`
 
 **Example Träffpunkter:**
 - Bagaren

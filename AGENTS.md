@@ -3,7 +3,7 @@
 This repository powers Skövde’s Träffpunktsstatistik service: a React frontend and a Flask API, deployed to Cloud Run with Firestore and Azure AD.
 
 ## Project Structure & Module Organization
-- `backend/`: Flask app (`app.py`), Firestore access (`firestore_service.py`), auth (`auth_utils*.py`), security and validation utilities (`security*.py`, `validators.py`), Gunicorn config.
+- `backend/`: Flask app (`app.py`), Cosmos DB access (`cosmos_service.py`), auth (`auth_utils*.py`), security and validation utilities (`security*.py`, `validators.py`), Gunicorn config.
 - `frontend/`: React app (CRA). Components live in `src/Components/`, utilities in `src/utils/` and API config in `src/config/`. Static assets under `public/`.
 - Root: `Dockerfile`, repository docs, and favicons.
 

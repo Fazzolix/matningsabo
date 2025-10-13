@@ -3,12 +3,11 @@ import secrets
 import re
 from flask import Flask, jsonify, request, send_from_directory, session
 from flask_cors import CORS
-from flask_session import Session
 from dotenv import load_dotenv
 import logging
 from datetime import datetime, timedelta
 from auth_utils import require_auth, get_azure_config, get_azure_user, require_admin, require_superadmin
-from firestore_service import FirestoreService
+from cosmos_service import CosmosService
 from security import (
     init_security_headers, rate_limit, rate_limit_auth, rate_limiter,
     validate_attendance_data, sanitize_string, validate_traffpunkt_name
@@ -26,19 +25,14 @@ app = Flask(__name__,
             static_folder='static',
             static_url_path='')
 
-# Konfiguration med förbättrad säkerhet
+# Konfiguration med förbättrad säkerhet (cookie‑baserade signerade sessioner)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', secrets.token_hex(32))
-app.config['SESSION_TYPE'] = 'filesystem'
-app.config['SESSION_FILE_DIR'] = '/tmp/flask_session'
 app.config['SESSION_PERMANENT'] = False
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('FLASK_ENV') != 'development'
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_NAME'] = 'traffpunkt_session'
-
-# Initiera session
-Session(app)
 
 # CORS med säkerhet
 allowed_origins = [os.getenv('FRONTEND_URL', 'http://localhost:3000')]
@@ -51,8 +45,8 @@ CORS(app,
      supports_credentials=True,
      allow_headers=['Content-Type', 'Authorization'])
 
-# Initiera Firestore
-db_service = FirestoreService()
+# Initiera Cosmos DB (skapar databas/containers om de saknas)
+db_service = CosmosService()
 
 # Initiera säkerhetsheaders
 init_security_headers(app)
@@ -276,7 +270,7 @@ def register_attendance():
         # Lägg till aktiviteten om den är ny
         db_service.add_activity_if_not_exists(data.get('activity'))
 
-        # Spara i Firestore
+        # Spara i Cosmos DB
         doc_id = db_service.add_attendance_record(data)
         
         logger.info(f"User OID {user_oid} registered attendance for {data['traffpunkt_id']}")

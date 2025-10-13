@@ -4,7 +4,7 @@ from functools import wraps
 from flask import request, jsonify, session
 import requests
 from datetime import datetime, timedelta
-from firestore_service import FirestoreService
+from cosmos_service import CosmosService
 
 logger = logging.getLogger(__name__)
 
@@ -86,16 +86,16 @@ def get_azure_user():
         
         # Spara i session med tidsstämpel
         session['azure_user'] = user_info
-        session['login_time'] = datetime.now()
+        session['login_time'] = datetime.now().isoformat()
         session.modified = True
         session.permanent = False
 
-        # Upsert user into Firestore under traffpunkter/__meta__/users
+        # Upsert user into Cosmos DB users container
         try:
-            fs = FirestoreService()
-            fs.upsert_user(user_info.get('oid'), user_info.get('email'), user_info.get('full_name') or user_info.get('name'))
+            cs = CosmosService()
+            cs.upsert_user(user_info.get('oid'), user_info.get('email'), user_info.get('full_name') or user_info.get('name'))
         except Exception as e:
-            logger.error(f"Failed to upsert user in Firestore: {e}")
+            logger.error(f"Failed to upsert user in Cosmos DB: {e}")
 
         logger.info(f"User logged in: OID={user_info['oid']}")
         return jsonify(user_info)
@@ -155,10 +155,10 @@ def require_admin(f):
         superadmin_email = (os.getenv('SUPERADMIN_EMAIL') or '').strip().lower()
         if superadmin_email and user_email == superadmin_email:
             return f(*args, **kwargs)
-        # Check Firestore role
+        # Check Cosmos role
         try:
-            fs = FirestoreService()
-            u = fs.get_user(azure_user.get('oid'))
+            cs = CosmosService()
+            u = cs.get_user(azure_user.get('oid'))
             if u and isinstance(u.get('roles'), dict) and bool(u['roles'].get('admin')):
                 return f(*args, **kwargs)
         except Exception as e:

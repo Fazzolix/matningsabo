@@ -1,0 +1,408 @@
+import os
+import re
+from uuid import uuid4
+from typing import Optional, List, Dict
+from datetime import datetime
+
+from azure.cosmos import CosmosClient, PartitionKey
+from azure.cosmos.exceptions import CosmosHttpResponseError, CosmosResourceNotFoundError
+
+
+def _iso_now() -> str:
+    return datetime.utcnow().isoformat()
+
+
+class CosmosService:
+    def __init__(self):
+        endpoint = os.getenv('COSMOS_ENDPOINT')
+        key = os.getenv('COSMOS_KEY')
+        db_name = os.getenv('COSMOS_DATABASE', 'traffpunkt')
+        if not endpoint or not key:
+            raise RuntimeError('COSMOS_ENDPOINT and COSMOS_KEY must be set')
+
+        self.client = CosmosClient(endpoint, key)
+
+        # Ensure database exists
+        try:
+            self.db = self.client.create_database_if_not_exists(id=db_name)
+        except CosmosHttpResponseError as e:
+            raise RuntimeError(f'Failed to ensure Cosmos DB database {db_name}: {e}')
+
+        # Containers and partition keys
+        self.c_att = self._ensure_container(
+            os.getenv('COSMOS_CONTAINER_ATTENDANCE', 'attendance_records'), '/traffpunkt_id'
+        )
+        self.c_act = self._ensure_container(
+            os.getenv('COSMOS_CONTAINER_ACTIVITIES', 'activities'), '/id'
+        )
+        self.c_tp = self._ensure_container(
+            os.getenv('COSMOS_CONTAINER_TRAFFPUNKTER', 'traffpunkter'), '/id'
+        )
+        self.c_users = self._ensure_container(
+            os.getenv('COSMOS_CONTAINER_USERS', 'Users_traffpunkt'), '/id'
+        )
+        self.c_admin_audit = self._ensure_container(
+            os.getenv('COSMOS_CONTAINER_ADMIN_AUDIT', 'Admin_audit_traffpunkt'), '/id'
+        )
+        self.c_att_audit = self._ensure_container(
+            os.getenv('COSMOS_CONTAINER_ATTENDANCE_AUDIT', 'Attendance_audit_traffpunkt'), '/id'
+        )
+
+    def _ensure_container(self, container_id: str, partition_path: str):
+        try:
+            return self.db.create_container_if_not_exists(
+                id=container_id,
+                partition_key=PartitionKey(path=partition_path)
+            )
+        except CosmosHttpResponseError as e:
+            raise RuntimeError(f'Failed to ensure container {container_id}: {e}')
+
+    # ---- Traffpunkter ----
+    def get_all_traffpunkter(self) -> List[Dict]:
+        query = 'SELECT * FROM c WHERE c.active = true'
+        items = list(self.c_tp.query_items(query=query, enable_cross_partition_query=True))
+        items.sort(key=lambda x: (x.get('name') or '').lower())
+        return items
+
+    def add_traffpunkt(self, data: Dict) -> Optional[str]:
+        name = (data.get('name') or '').strip()
+        if not name:
+            return None
+        # Create URL-friendly id (match Firestore logic)
+        tid = name.lower().replace(' ', '-').replace('å', 'a').replace('ä', 'a').replace('ö', 'o')
+        tid = re.sub(r'[^a-z0-9-]', '', tid)
+        try:
+            # Check existing
+            try:
+                _ = self.c_tp.read_item(item=tid, partition_key=tid)
+                return None  # already exists
+            except CosmosResourceNotFoundError:
+                pass
+
+            doc = {
+                'id': tid,
+                'name': name,
+                'active': bool(data.get('active', True)),
+                'address': data.get('address', ''),
+                'description': data.get('description', ''),
+                'created_at': _iso_now(),
+            }
+            self.c_tp.create_item(doc)
+            return tid
+        except CosmosHttpResponseError as e:
+            # Swallow only 409 conflicts to emulate idempotent create; propagate others.
+            if getattr(e, 'status_code', None) == 409:
+                return None
+            raise
+
+    # ---- Activities ----
+    def get_all_activities(self) -> List[Dict]:
+        query = 'SELECT * FROM c WHERE c.active = true'
+        items = list(self.c_act.query_items(query=query, enable_cross_partition_query=True))
+        # Guard against null/invalid sort_order; push nulls last and normalize to numeric
+        items.sort(key=lambda x: (
+            x.get('sort_order') is None,
+            x.get('sort_order') if isinstance(x.get('sort_order'), (int, float)) else 0
+        ))
+        return items
+
+    def get_activity(self, activity_id: str) -> Optional[Dict]:
+        if not activity_id:
+            return None
+        try:
+            doc = self.c_act.read_item(item=activity_id, partition_key=activity_id)
+            return doc
+        except CosmosResourceNotFoundError:
+            return None
+
+    def find_activity_by_name(self, name: str) -> Optional[Dict]:
+        if not name:
+            return None
+        q = 'SELECT TOP 1 * FROM c WHERE c.name = @name'
+        params = [{'name': '@name', 'value': name}]
+        docs = list(self.c_act.query_items(query=q, parameters=params, enable_cross_partition_query=True))
+        return docs[0] if docs else None
+
+    def add_activity_if_not_exists(self, activity_name: Optional[str]) -> None:
+        if not activity_name:
+            return
+        activity_id = re.sub(r'[^a-z0-9-]', '', (activity_name or '').lower().replace(' ', '-'))
+        try:
+            self.c_act.read_item(item=activity_id, partition_key=activity_id)
+            return  # already exists
+        except CosmosResourceNotFoundError:
+            # compute max sort_order
+            docs = list(self.c_act.query_items(query='SELECT c.sort_order FROM c', enable_cross_partition_query=True))
+            max_sort = 0
+            if docs:
+                max_sort = max(int(d.get('sort_order') or 0) for d in docs)
+            doc = {
+                'id': activity_id,
+                'name': activity_name,
+                'active': True,
+                'category': 'allman',
+                'sort_order': max_sort + 1,
+                'created_at': _iso_now(),
+            }
+            try:
+                self.c_act.create_item(doc)
+            except CosmosHttpResponseError as e:
+                # Idempotency under concurrency:
+                # When multiple requests attempt to auto-create the same activity at the
+                # same time (e.g., concurrent /api/attendance submissions), Cosmos may
+                # return 409 Conflict for the later creates. Treat 409 as "already
+                # exists" to match Firestore's upsert-like semantics and avoid 500s.
+                code = getattr(e, 'status_code', None)
+                if code == 409:
+                    return
+                # Bubble up other errors
+                raise
+
+    def add_activity(self, data: Dict) -> Optional[str]:
+        name = (data.get('name') or '').strip()
+        if not name:
+            return None
+        activity_id = re.sub(r'[^a-z0-9-]', '', name.lower().replace(' ', '-'))
+        try:
+            # return None if exists
+            try:
+                _ = self.c_act.read_item(item=activity_id, partition_key=activity_id)
+                return None
+            except CosmosResourceNotFoundError:
+                pass
+
+            # compute max sort_order
+            docs = list(self.c_act.query_items(query='SELECT c.sort_order FROM c', enable_cross_partition_query=True))
+            max_sort = 0
+            if docs:
+                max_sort = max(int(d.get('sort_order') or 0) for d in docs)
+
+            doc = {
+                'id': activity_id,
+                'name': name,
+                'active': bool(data.get('active', True)),
+                'description': data.get('description', ''),
+                'category': data.get('category', 'allman'),
+                'sort_order': max_sort + 1,
+                'created_at': _iso_now(),
+            }
+            self.c_act.create_item(doc)
+            return activity_id
+        except CosmosHttpResponseError as e:
+            # Only swallow true 409 conflicts as "already exists"; all other
+            # errors (throttling, auth, misconfig) are re-raised to surface 5xx.
+            if getattr(e, 'status_code', None) == 409:
+                return None
+            raise
+
+    def update_activity_name(self, activity_id: str, new_name: str, old_name: str) -> bool:
+        if not activity_id or not new_name:
+            return False
+        try:
+            doc = self.c_act.read_item(item=activity_id, partition_key=activity_id)
+            doc['name'] = new_name
+            self.c_act.replace_item(item=activity_id, body=doc, partition_key=activity_id)
+        except CosmosResourceNotFoundError:
+            return False
+
+        # Update attendance records with old name
+        if old_name and old_name != new_name:
+            q = 'SELECT c.id, c.traffpunkt_id FROM c WHERE c.activity = @old'
+            params = [{'name': '@old', 'value': old_name}]
+            for item in self.c_att.query_items(query=q, parameters=params, enable_cross_partition_query=True):
+                # fetch full doc
+                # We don't know pk from query except we selected traffpunkt_id
+                try:
+                    full = self.c_att.read_item(item=item['id'], partition_key=item['traffpunkt_id'])
+                    full['activity'] = new_name
+                    self.c_att.replace_item(item=item['id'], body=full, partition_key=item['traffpunkt_id'])
+                except CosmosHttpResponseError:
+                    continue
+        return True
+
+    def deactivate_activity(self, activity_id: str) -> bool:
+        if not activity_id:
+            return False
+        try:
+            doc = self.c_act.read_item(item=activity_id, partition_key=activity_id)
+            doc['active'] = False
+            self.c_act.replace_item(item=activity_id, body=doc, partition_key=activity_id)
+            return True
+        except CosmosResourceNotFoundError:
+            return False
+
+    # ---- Attendance ----
+    def add_attendance_record(self, data: Dict) -> str:
+        d = dict(data)
+        if not d.get('id'):
+            d['id'] = str(uuid4())
+        # ensure timestamps as ISO strings
+        ra = d.get('registered_at')
+        if not isinstance(ra, str):
+            d['registered_at'] = _iso_now()
+        lma = d.get('last_modified_at')
+        if not isinstance(lma, str):
+            d['last_modified_at'] = d['registered_at']
+        if 'edit_count' not in d:
+            d['edit_count'] = 0
+        self.c_att.create_item(d)
+        return d['id']
+
+    def get_statistics(self, traffpunkt_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None) -> List[Dict]:
+        # Build SQL query dynamically
+        clauses = []
+        params = []
+        if traffpunkt_id:
+            clauses.append('c.traffpunkt_id = @tp')
+            params.append({'name': '@tp', 'value': traffpunkt_id})
+        if date_from:
+            clauses.append('c.date >= @df')
+            params.append({'name': '@df', 'value': date_from})
+        if date_to:
+            clauses.append('c.date <= @dt')
+            params.append({'name': '@dt', 'value': date_to})
+        where = (' WHERE ' + ' AND '.join(clauses)) if clauses else ''
+        q = f'SELECT * FROM c{where}'
+        items = list(self.c_att.query_items(query=q, parameters=params, enable_cross_partition_query=True))
+        return items
+
+    def list_my_attendance(self, oid: str, email: Optional[str], date_from: Optional[str], date_to: Optional[str], limit: int = 500) -> List[Dict]:
+        res: List[Dict] = []
+        clauses = ['c.registered_by_oid = @oid']
+        params = [{'name': '@oid', 'value': oid}]
+        if date_from:
+            clauses.append('c.date >= @df')
+            params.append({'name': '@df', 'value': date_from})
+        if date_to:
+            clauses.append('c.date <= @dt')
+            params.append({'name': '@dt', 'value': date_to})
+        q1 = f'SELECT * FROM c WHERE {" AND ".join(clauses)}'
+        res.extend(list(self.c_att.query_items(query=q1, parameters=params, enable_cross_partition_query=True)))
+
+        # legacy fallback by email
+        if email:
+            clauses2 = ['c.registered_by = @em']
+            params2 = [{'name': '@em', 'value': email}]
+            if date_from:
+                clauses2.append('c.date >= @df2')
+                params2.append({'name': '@df2', 'value': date_from})
+            if date_to:
+                clauses2.append('c.date <= @dt2')
+                params2.append({'name': '@dt2', 'value': date_to})
+            q2 = f'SELECT * FROM c WHERE {" AND ".join(clauses2)}'
+            for d in self.c_att.query_items(query=q2, parameters=params2, enable_cross_partition_query=True):
+                if not any(r.get('id') == d.get('id') for r in res):
+                    res.append(d)
+
+        # Sort by date desc then registered_at desc (ISO strings sort correctly)
+        res.sort(key=lambda x: (x.get('date') or '', x.get('registered_at') or ''), reverse=True)
+        return res[: max(1, min(limit, 500))]
+
+    def get_attendance(self, doc_id: str) -> Optional[Dict]:
+        # Unknown partition key: query by id
+        q = 'SELECT TOP 1 * FROM c WHERE c.id = @id'
+        p = [{'name': '@id', 'value': doc_id}]
+        docs = list(self.c_att.query_items(query=q, parameters=p, enable_cross_partition_query=True))
+        return docs[0] if docs else None
+
+    def update_attendance(self, doc_id: str, new_data: Dict) -> Optional[Dict]:
+        existing = self.get_attendance(doc_id)
+        if not existing:
+            return None
+        edit_count = int(existing.get('edit_count', 0)) + 1
+        new_data2 = {**new_data, 'edit_count': edit_count, 'last_modified_at': _iso_now()}
+        # Preserve immutable/partition fields
+        new_data2['id'] = doc_id
+        if existing.get('traffpunkt_id'):
+            new_data2['traffpunkt_id'] = existing['traffpunkt_id']
+        # Preserve partition key value
+        pk = existing.get('traffpunkt_id')
+        if not pk:
+            return None
+        self.c_att.replace_item(item=doc_id, body=new_data2, partition_key=pk)
+        return new_data2
+
+    def delete_attendance(self, doc_id: str) -> bool:
+        existing = self.get_attendance(doc_id)
+        if not existing:
+            return False
+        pk = existing.get('traffpunkt_id')
+        try:
+            self.c_att.delete_item(item=doc_id, partition_key=pk)
+            return True
+        except CosmosHttpResponseError:
+            return False
+
+    def write_attendance_audit(self, action: str, actor_oid: str, actor_email: str, attendance_id: str, changed_fields: Optional[List[str]] = None):
+        doc = {
+            'id': str(uuid4()),
+            'action': action,
+            'actor_oid': actor_oid,
+            'actor_email': (actor_email or '').lower(),
+            'attendance_id': attendance_id,
+            'changed_fields': changed_fields or [],
+            'ts': _iso_now(),
+        }
+        self.c_att_audit.create_item(doc)
+
+    # ---- Users & roles ----
+    def upsert_user(self, oid: str, email: str, display_name: str) -> None:
+        if not oid:
+            return
+        email_l = (email or '').strip().lower()
+        try:
+            user = self.c_users.read_item(item=oid, partition_key=oid)
+            # update
+            user.update({
+                'email': email_l,
+                'display_name': display_name or '',
+                'last_login_at': _iso_now(),
+            })
+            self.c_users.replace_item(item=oid, body=user, partition_key=oid)
+        except CosmosResourceNotFoundError:
+            doc = {
+                'id': oid,
+                'email': email_l,
+                'display_name': display_name or '',
+                'roles': {'admin': False},
+                'created_at': _iso_now(),
+                'last_login_at': _iso_now(),
+            }
+            self.c_users.create_item(doc)
+
+    def get_user(self, oid: str) -> Optional[Dict]:
+        if not oid:
+            return None
+        try:
+            return self.c_users.read_item(item=oid, partition_key=oid)
+        except CosmosResourceNotFoundError:
+            return None
+
+    def list_users(self, q: Optional[str] = None, limit: int = 200) -> List[Dict]:
+        users = list(self.c_users.read_all_items())
+        q_l = (q or '').strip().lower()
+        if q_l:
+            users = [u for u in users if q_l in (u.get('email') or '').lower()]
+        users.sort(key=lambda u: (u.get('created_at') is None, u.get('created_at'), u.get('email')))
+        return users[: max(1, min(limit, 500))]
+
+    def set_admin_role(self, target_oid: str, admin: bool, actor_oid: str, actor_email: str) -> Dict:
+        try:
+            user = self.c_users.read_item(item=target_oid, partition_key=target_oid)
+        except CosmosResourceNotFoundError:
+            raise KeyError('user_not_found')
+        roles = dict(user.get('roles') or {})
+        roles['admin'] = bool(admin)
+        user['roles'] = roles
+        self.c_users.replace_item(item=target_oid, body=user, partition_key=target_oid)
+        # Audit
+        self.c_admin_audit.create_item({
+            'id': str(uuid4()),
+            'action': 'grant_admin' if admin else 'revoke_admin',
+            'actor_oid': actor_oid,
+            'actor_email': (actor_email or '').lower(),
+            'target_oid': target_oid,
+            'target_email': (user.get('email') or '').lower(),
+            'ts': _iso_now(),
+        })
+        return {'id': target_oid, 'roles': roles}
