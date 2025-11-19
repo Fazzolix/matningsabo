@@ -12,36 +12,59 @@ from cosmos_service import CosmosService
 
 logger = logging.getLogger(__name__)
 
-_jwk_client = None
+_jwk_clients = {}
 
 
-def _get_jwk_client():
-    """Return a cached PyJWKClient for the configured Azure tenant."""
-    global _jwk_client
-    tenant_id = os.getenv('AZURE_TENANT_ID')
-    if not tenant_id:
-        raise RuntimeError('AZURE_TENANT_ID must be configured for token validation')
-    if _jwk_client is None:
-        jwk_url = f'https://login.microsoftonline.com/{tenant_id}/discovery/v2.0/keys'
-        _jwk_client = PyJWKClient(jwk_url)
-    return _jwk_client
+def _get_jwk_client(tenant_id: str):
+    """Return a cached PyJWKClient for the supplied tenant (or 'common')."""
+    cache_key = tenant_id or 'common'
+    if cache_key not in _jwk_clients:
+        jwk_url = f'https://login.microsoftonline.com/{cache_key}/discovery/v2.0/keys'
+        _jwk_clients[cache_key] = PyJWKClient(jwk_url)
+    return _jwk_clients[cache_key]
 
 
 def _validate_graph_token(token: str) -> dict:
     """Validate Microsoft Graph access token signature/audience/tenant/client."""
-    jwk_client = _get_jwk_client()
+    # Peek the tenant from the unverified payload so we can load matching signing keys.
+    try:
+        unverified = jwt.decode(token, options={
+            'verify_signature': False,
+            'verify_exp': False,
+            'verify_aud': False,
+        })
+    except Exception as exc:
+        raise jwt_exceptions.InvalidTokenError(f'Unable to parse token: {exc}') from exc
+
+    token_tid = unverified.get('tid') or os.getenv('AZURE_TENANT_ID') or 'common'
+    jwk_client = _get_jwk_client(token_tid)
     signing_key = jwk_client.get_signing_key_from_jwt(token)
-    audience = 'https://graph.microsoft.com'
+
     claims = jwt.decode(
         token,
         signing_key.key,
         algorithms=['RS256'],
-        audience=[audience, f'{audience}/'],
+        options={'verify_aud': False}
     )
 
-    tenant_id = os.getenv('AZURE_TENANT_ID')
-    if tenant_id and claims.get('tid') != tenant_id:
+    # Audience must target Microsoft Graph
+    allowed_audiences = {
+        'https://graph.microsoft.com',
+        'https://graph.microsoft.com/',
+        '00000003-0000-0000-c000-000000000000'
+    }
+    aud = claims.get('aud')
+    if aud not in allowed_audiences:
+        raise jwt_exceptions.InvalidTokenError('Unexpected audience in token')
+
+    # Issuer/tenant enforcement
+    configured_tenant = os.getenv('AZURE_TENANT_ID')
+    if configured_tenant and claims.get('tid') != configured_tenant:
         raise jwt_exceptions.InvalidTokenError('Unexpected tenant in token')
+
+    expected_issuer = f'https://login.microsoftonline.com/{claims.get("tid")}/v2.0'
+    if claims.get('iss') not in {expected_issuer, expected_issuer.replace('/v2.0', '/1.0')}:
+        raise jwt_exceptions.InvalidTokenError('Unexpected issuer in token')
 
     client_id = os.getenv('AZURE_CLIENT_ID')
     azp = claims.get('azp') or claims.get('appid')
