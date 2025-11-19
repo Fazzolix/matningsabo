@@ -12,16 +12,16 @@ from cosmos_service import CosmosService
 
 logger = logging.getLogger(__name__)
 
-_jwk_clients = {}
+_jwk_client = None
 
 
-def _get_jwk_client(tenant_id: str):
-    """Return a cached PyJWKClient for the supplied tenant (or 'common')."""
-    cache_key = tenant_id or 'common'
-    if cache_key not in _jwk_clients:
-        jwk_url = f'https://login.microsoftonline.com/{cache_key}/discovery/v2.0/keys'
-        _jwk_clients[cache_key] = PyJWKClient(jwk_url)
-    return _jwk_clients[cache_key]
+def _get_jwk_client():
+    """Return a cached PyJWKClient against the global Microsoft identity JWKS."""
+    global _jwk_client
+    if _jwk_client is None:
+        jwk_url = 'https://login.microsoftonline.com/common/discovery/v2.0/keys'
+        _jwk_client = PyJWKClient(jwk_url)
+    return _jwk_client
 
 
 def _validate_graph_token(token: str) -> dict:
@@ -36,8 +36,8 @@ def _validate_graph_token(token: str) -> dict:
     except Exception as exc:
         raise jwt_exceptions.InvalidTokenError(f'Unable to parse token: {exc}') from exc
 
-    token_tid = unverified.get('tid') or os.getenv('AZURE_TENANT_ID') or 'common'
-    jwk_client = _get_jwk_client(token_tid)
+    token_tid = unverified.get('tid') or os.getenv('AZURE_TENANT_ID')
+    jwk_client = _get_jwk_client()
     signing_key = jwk_client.get_signing_key_from_jwt(token)
 
     claims = jwt.decode(
