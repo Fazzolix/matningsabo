@@ -82,7 +82,11 @@ def validate_azure_token(token):
         return None
 
     iss = str(claims.get('iss') or '')
-    if not iss.lower().startswith('https://login.microsoftonline.com/'):
+    allowed_issuers = (
+        'https://login.microsoftonline.com/',
+        'https://sts.windows.net/',
+    )
+    if not any(iss.lower().startswith(prefix) for prefix in allowed_issuers):
         logger.warning('Unexpected issuer: %s', iss)
         return None
     if expected_tid and expected_tid not in iss.lower():
