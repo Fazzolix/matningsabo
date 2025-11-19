@@ -1,77 +1,25 @@
 import os
 import logging
+import base64
+import json
 from functools import wraps
 from flask import request, jsonify, session
 import requests
 from requests import RequestException
-from datetime import datetime, timedelta
-import jwt
-from jwt import PyJWKClient
-from jwt import exceptions as jwt_exceptions
+from datetime import datetime, timedelta, timezone
 from cosmos_service import CosmosService
 
 logger = logging.getLogger(__name__)
 
-_jwk_client = None
-
-
-def _get_jwk_client():
-    """Return a cached PyJWKClient against the global Microsoft identity JWKS."""
-    global _jwk_client
-    if _jwk_client is None:
-        jwk_url = 'https://login.microsoftonline.com/common/discovery/v2.0/keys'
-        _jwk_client = PyJWKClient(jwk_url)
-    return _jwk_client
-
-
-def _validate_graph_token(token: str) -> dict:
-    """Validate Microsoft Graph access token signature/audience/tenant/client."""
-    # Peek the tenant from the unverified payload so we can load matching signing keys.
+def _decode_claims(token: str) -> dict:
+    """Decode JWT payload without verifying signature."""
     try:
-        unverified = jwt.decode(token, options={
-            'verify_signature': False,
-            'verify_exp': False,
-            'verify_aud': False,
-        })
-    except Exception as exc:
-        raise jwt_exceptions.InvalidTokenError(f'Unable to parse token: {exc}') from exc
-
-    token_tid = unverified.get('tid') or os.getenv('AZURE_TENANT_ID')
-    jwk_client = _get_jwk_client()
-    signing_key = jwk_client.get_signing_key_from_jwt(token)
-
-    claims = jwt.decode(
-        token,
-        signing_key.key,
-        algorithms=['RS256'],
-        options={'verify_aud': False}
-    )
-
-    # Audience must target Microsoft Graph
-    allowed_audiences = {
-        'https://graph.microsoft.com',
-        'https://graph.microsoft.com/',
-        '00000003-0000-0000-c000-000000000000'
-    }
-    aud = claims.get('aud')
-    if aud not in allowed_audiences:
-        raise jwt_exceptions.InvalidTokenError('Unexpected audience in token')
-
-    # Issuer/tenant enforcement
-    configured_tenant = os.getenv('AZURE_TENANT_ID')
-    if configured_tenant and claims.get('tid') != configured_tenant:
-        raise jwt_exceptions.InvalidTokenError('Unexpected tenant in token')
-
-    expected_issuer = f'https://login.microsoftonline.com/{claims.get("tid")}/v2.0'
-    if claims.get('iss') not in {expected_issuer, expected_issuer.replace('/v2.0', '/1.0')}:
-        raise jwt_exceptions.InvalidTokenError('Unexpected issuer in token')
-
-    client_id = os.getenv('AZURE_CLIENT_ID')
-    azp = claims.get('azp') or claims.get('appid')
-    if client_id and azp != client_id:
-        raise jwt_exceptions.InvalidTokenError('Unexpected client/application in token')
-
-    return claims
+        _header, payload, _sig = token.split('.')
+        payload += '=' * (-len(payload) % 4)
+        data = base64.urlsafe_b64decode(payload.encode('utf-8'))
+        return json.loads(data.decode('utf-8'))
+    except Exception:
+        return {}
 
 def get_azure_config():
     """Returnerar Azure AD-konfiguration för MSAL"""
@@ -97,14 +45,48 @@ def get_azure_config():
     return jsonify(config)
 
 def validate_azure_token(token):
-    """Validate Azure AD token cryptographically and fetch profile from Graph."""
-    try:
-        claims = _validate_graph_token(token)
-    except jwt_exceptions.InvalidTokenError as exc:
-        logger.warning(f"Azure token rejected: {exc}")
+    """Validate Azure AD Graph token using claim inspection + Graph API."""
+    claims = _decode_claims(token)
+    if not claims:
+        logger.warning('Token saknar claims')
         return None
-    except Exception as exc:
-        logger.error(f"Failed to validate Azure token: {exc}")
+
+    now = datetime.now(timezone.utc).timestamp()
+    try:
+        exp = float(claims.get('exp'))
+        if now > exp:
+            logger.warning('Token har utgått')
+            return None
+    except Exception:
+        logger.warning('Token saknar exp-claim')
+        return None
+
+    try:
+        nbf = float(claims.get('nbf', 0))
+        if now < nbf:
+            logger.warning('Token inte giltig ännu (nbf)')
+            return None
+    except Exception:
+        pass
+
+    expected_tid = (os.getenv('AZURE_TENANT_ID') or '').strip().lower()
+    token_tid = str(claims.get('tid') or '').strip().lower()
+    if expected_tid and token_tid != expected_tid:
+        logger.warning('Token tenant mismatch: expected %s got %s', expected_tid, token_tid)
+        return None
+
+    aud = str(claims.get('aud') or '').strip().rstrip('/').lower()
+    allowed_aud = {'https://graph.microsoft.com', '00000003-0000-0000-c000-000000000000'}
+    if aud not in allowed_aud:
+        logger.warning('Unexpected token audience: %s', claims.get('aud'))
+        return None
+
+    iss = str(claims.get('iss') or '')
+    if not iss.lower().startswith('https://login.microsoftonline.com/'):
+        logger.warning('Unexpected issuer: %s', iss)
+        return None
+    if expected_tid and expected_tid not in iss.lower():
+        logger.warning('Issuer tenant mismatch: %s', iss)
         return None
 
     try:
@@ -122,14 +104,20 @@ def validate_azure_token(token):
         return None
 
     user_data = graph_response.json()
+    token_oid = str(claims.get('oid') or '').strip().lower()
+    graph_oid = str(user_data.get('id') or '').strip().lower()
+    if token_oid and graph_oid and token_oid != graph_oid:
+        logger.warning('OID mismatch mellan token och Graph: %s vs %s', token_oid, graph_oid)
+        return None
+
     return {
-        'name': user_data.get('displayName') or claims.get('name', ''),
-        'given_name': user_data.get('givenName') or claims.get('given_name', ''),
-        'email': user_data.get('mail') or user_data.get('userPrincipalName') or claims.get('preferred_username', ''),
-        'preferred_username': user_data.get('userPrincipalName') or claims.get('preferred_username', ''),
-        'upn': user_data.get('userPrincipalName') or claims.get('upn', ''),
-        'oid': user_data.get('id') or claims.get('oid', 'unknown'),
-        'tid': claims.get('tid', os.getenv('AZURE_TENANT_ID', 'unknown'))
+        'name': user_data.get('displayName', ''),
+        'given_name': user_data.get('givenName', ''),
+        'email': user_data.get('mail') or user_data.get('userPrincipalName', ''),
+        'preferred_username': user_data.get('userPrincipalName', ''),
+        'upn': user_data.get('userPrincipalName', ''),
+        'oid': graph_oid or token_oid or 'unknown',
+        'tid': token_tid or expected_tid or 'unknown'
     }
 
 def get_azure_user():
