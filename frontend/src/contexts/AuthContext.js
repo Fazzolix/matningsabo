@@ -36,7 +36,8 @@ export const AuthProvider = ({ children }) => {
             navigateToLoginRequestUrl: false
           },
           cache: {
-            cacheLocation: 'localStorage',
+            // Store tokens in sessionStorage to reduce the impact of XSS.
+            cacheLocation: 'sessionStorage',
             storeAuthStateInCookie: true
           }
         };

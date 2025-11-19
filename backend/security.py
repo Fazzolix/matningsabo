@@ -60,11 +60,8 @@ def rate_limit(max_requests=60, window_seconds=60):
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
-            # Använd IP-adress som nyckel (tar hänsyn till proxies)
-            key = request.headers.get('X-Forwarded-For', request.remote_addr) or 'unknown'
-            # Ta första IP om flera (vid proxy-chains)
-            if ',' in key:
-                key = key.split(',')[0].strip()
+            # Använd IP-adress efter ProxyFix (X-Forwarded-For hanteras i WSGI-lagret)
+            key = request.remote_addr or 'unknown'
             
             if not rate_limiter.is_allowed(key, max_requests, window_seconds):
                 return jsonify({
@@ -99,7 +96,7 @@ def add_security_headers(response):
     # Content Security Policy
     csp = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://login.microsoftonline.com; "
+        "script-src 'self' https://login.microsoftonline.com; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
         "img-src 'self' data: https:; "
         "font-src 'self' data: https://fonts.gstatic.com; "

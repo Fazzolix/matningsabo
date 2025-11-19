@@ -6,6 +6,7 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 import logging
 from datetime import datetime, timedelta
+from werkzeug.middleware.proxy_fix import ProxyFix
 from auth_utils import require_auth, get_azure_config, get_azure_user, require_admin, require_superadmin
 from cosmos_service import CosmosService
 from security import (
@@ -24,6 +25,7 @@ load_dotenv()
 app = Flask(__name__, 
             static_folder='static',
             static_url_path='')
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
 # Konfiguration med förbättrad säkerhet (cookie‑baserade signerade sessioner)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', secrets.token_hex(32))
@@ -34,11 +36,16 @@ app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_NAME'] = 'traffpunkt_session'
 
-# CORS med säkerhet
-allowed_origins = [os.getenv('FRONTEND_URL', 'http://localhost:3000')]
-if os.environ.get('FLASK_ENV') == 'production':
-    # I produktion, vara mer restriktiv
-    allowed_origins = [os.getenv('FRONTEND_URL')]
+# CORS med säkerhet – säkerställ att vi aldrig skickar None till Flask-CORS
+default_origin = 'http://localhost:3000'
+frontend_url = (os.getenv('FRONTEND_URL') or '').strip()
+if not frontend_url:
+    logger.warning('FRONTEND_URL is not set – falling back to %s for CORS', default_origin)
+
+allowed_origins = [frontend_url or default_origin]
+if os.environ.get('FLASK_ENV') != 'production':
+    # Utveckling kan acceptera lokalt suffix (handled already ovan)
+    pass
 
 CORS(app, 
      origins=allowed_origins,
@@ -309,8 +316,14 @@ def get_statistics():
             date_from=date_from,
             date_to=date_to
         )
-        
-        return jsonify(stats), 200
+
+        # Ta bort PII-relaterade fält men låt övriga statistikfält vara orörda
+        redact_keys = {'registered_by', 'registered_by_oid', 'registered_at', 'last_modified_at', 'edit_count'}
+        sanitized = []
+        for item in stats:
+            sanitized.append({k: v for k, v in item.items() if k not in redact_keys})
+
+        return jsonify(sanitized), 200
         
     except Exception as e:
         logger.error(f"Error fetching statistics: {str(e)}")

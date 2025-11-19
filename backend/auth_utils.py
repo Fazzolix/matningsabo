@@ -3,10 +3,52 @@ import logging
 from functools import wraps
 from flask import request, jsonify, session
 import requests
+from requests import RequestException
 from datetime import datetime, timedelta
+import jwt
+from jwt import PyJWKClient
+from jwt import exceptions as jwt_exceptions
 from cosmos_service import CosmosService
 
 logger = logging.getLogger(__name__)
+
+_jwk_client = None
+
+
+def _get_jwk_client():
+    """Return a cached PyJWKClient for the configured Azure tenant."""
+    global _jwk_client
+    tenant_id = os.getenv('AZURE_TENANT_ID')
+    if not tenant_id:
+        raise RuntimeError('AZURE_TENANT_ID must be configured for token validation')
+    if _jwk_client is None:
+        jwk_url = f'https://login.microsoftonline.com/{tenant_id}/discovery/v2.0/keys'
+        _jwk_client = PyJWKClient(jwk_url)
+    return _jwk_client
+
+
+def _validate_graph_token(token: str) -> dict:
+    """Validate Microsoft Graph access token signature/audience/tenant/client."""
+    jwk_client = _get_jwk_client()
+    signing_key = jwk_client.get_signing_key_from_jwt(token)
+    audience = 'https://graph.microsoft.com'
+    claims = jwt.decode(
+        token,
+        signing_key.key,
+        algorithms=['RS256'],
+        audience=[audience, f'{audience}/'],
+    )
+
+    tenant_id = os.getenv('AZURE_TENANT_ID')
+    if tenant_id and claims.get('tid') != tenant_id:
+        raise jwt_exceptions.InvalidTokenError('Unexpected tenant in token')
+
+    client_id = os.getenv('AZURE_CLIENT_ID')
+    azp = claims.get('azp') or claims.get('appid')
+    if client_id and azp != client_id:
+        raise jwt_exceptions.InvalidTokenError('Unexpected client/application in token')
+
+    return claims
 
 def get_azure_config():
     """Returnerar Azure AD-konfiguration för MSAL"""
@@ -32,34 +74,40 @@ def get_azure_config():
     return jsonify(config)
 
 def validate_azure_token(token):
-    """Validera Azure AD token med Microsoft Graph API"""
+    """Validate Azure AD token cryptographically and fetch profile from Graph."""
     try:
-        # Använd Microsoft Graph API för att validera token
-        # Detta är mer tillförlitligt för Azure AD tokens
+        claims = _validate_graph_token(token)
+    except jwt_exceptions.InvalidTokenError as exc:
+        logger.warning(f"Azure token rejected: {exc}")
+        return None
+    except Exception as exc:
+        logger.error(f"Failed to validate Azure token: {exc}")
+        return None
+
+    try:
         graph_response = requests.get(
             'https://graph.microsoft.com/v1.0/me',
-            headers={'Authorization': f'Bearer {token}'}
+            headers={'Authorization': f'Bearer {token}'},
+            timeout=5
         )
-        
-        if graph_response.status_code == 200:
-            # Token är giltig, extrahera användarinfo
-            user_data = graph_response.json()
-            return {
-                'name': user_data.get('displayName', ''),
-                'given_name': user_data.get('givenName', ''),
-                'email': user_data.get('mail') or user_data.get('userPrincipalName', ''),
-                'preferred_username': user_data.get('userPrincipalName', ''),
-                'upn': user_data.get('userPrincipalName', ''),
-                'oid': user_data.get('id', 'unknown'),
-                'tid': os.getenv('AZURE_TENANT_ID', 'unknown')
-            }
-        else:
-            logger.error(f"Graph API validation failed: {graph_response.status_code}")
-            return None
-            
-    except Exception as e:
-        logger.error(f"Token validation error: {str(e)}")
+    except RequestException as exc:
+        logger.error(f"Graph API unreachable: {exc}")
         return None
+
+    if graph_response.status_code != 200:
+        logger.error(f"Graph API validation failed: {graph_response.status_code}")
+        return None
+
+    user_data = graph_response.json()
+    return {
+        'name': user_data.get('displayName') or claims.get('name', ''),
+        'given_name': user_data.get('givenName') or claims.get('given_name', ''),
+        'email': user_data.get('mail') or user_data.get('userPrincipalName') or claims.get('preferred_username', ''),
+        'preferred_username': user_data.get('userPrincipalName') or claims.get('preferred_username', ''),
+        'upn': user_data.get('userPrincipalName') or claims.get('upn', ''),
+        'oid': user_data.get('id') or claims.get('oid', 'unknown'),
+        'tid': claims.get('tid', os.getenv('AZURE_TENANT_ID', 'unknown'))
+    }
 
 def get_azure_user():
     """Hämtar användarinfo från Azure AD token"""
