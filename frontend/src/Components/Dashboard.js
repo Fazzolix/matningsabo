@@ -24,14 +24,21 @@ const Dashboard = () => {
     const [traffpunkter, setTraffpunkter] = useState([]);
     const [activities, setActivities] = useState([]);
     const [filters, setFilters] = useState({
+        // Träffpunktfilter (backend-filter)
         traffpunkt_id: '',
+        // Datumintervall (backend-filter)
         from: toISODateString(new Date(new Date().setMonth(new Date().getMonth() - 1))),
         to: toISODateString(new Date()),
+        // Aktiviteter (frontend-filter)
         selectedActivities: [],
-        time_block: '', // '', 'fm', 'em', 'kv'
+        // Tidsblock (frontend-filter) – '', 'fm', 'em', 'kv'
+        time_block: '',
+        // Könsfilter (frontend-filter): '' = alla, 'men' = enbart män, 'women' = enbart kvinnor
+        gender: '',
     });
     const [loading, setLoading] = useState(true);
     const [showAllPopular, setShowAllPopular] = useState(false);
+    const [showAllPopularAvg, setShowAllPopularAvg] = useState(false);
     const [error, setError] = useState(null);
 
     useEffect(() => {
@@ -58,6 +65,9 @@ const Dashboard = () => {
     }, [msalInstance, user, filters.from, filters.to, filters.traffpunkt_id]);
 
     const filteredStats = useMemo(() => {
+        // Frontend-baserad filtrering på aktivitetsnamn och tidsblock.
+        // Vi behåller alla poster här så att könsfiltrering kan göras i aggregeringen,
+        // vilket gör det möjligt att jämföra snitt per aktivitet oavsett hur många som deltog.
         let s = stats;
         if (filters.selectedActivities.length > 0) {
             s = s.filter(stat => filters.selectedActivities.includes(stat.activity));
@@ -83,9 +93,10 @@ const Dashboard = () => {
         }));
       };
 
-    const { kpi, genderData, visitorTypeData, popularActivitiesAll, dailySeries } = useMemo(() => {
+    const { kpi, genderData, visitorTypeData, popularActivitiesAll, popularActivitiesAvg, dailySeries } = useMemo(() => {
+        // Om ingen statistik finns, bygg en tom tidsserie över vald period
+        // så att linjediagrammet fortfarande ser helt ut.
         if (filteredStats.length === 0) {
-            // Build empty series for the range so the chart doesn't look broken
             const series = [];
             try {
                 const start = new Date(filters.from);
@@ -95,40 +106,98 @@ const Dashboard = () => {
                     series.push({ date: iso, visitors: 0 });
                 }
             } catch (e) {
-                // Fallback: leave empty on invalid dates
+                // Fallback: lämna serien tom vid ogiltiga datum
             }
-            return { kpi: { total: 0, avg: '0.0', unique: 0, occurrences: 0 }, genderData: [], visitorTypeData: [], popularActivitiesAll: [], dailySeries: series };
+            return {
+                kpi: { total: 0, avg: '0.0', unique: 0, occurrences: 0 },
+                genderData: [],
+                visitorTypeData: [],
+                popularActivitiesAll: [],
+                popularActivitiesAvg: [],
+                dailySeries: series,
+            };
         }
 
-        const total = filteredStats.reduce((sum, item) => sum + item.total_participants, 0);
-        const men = filteredStats.reduce((sum, item) => sum + Object.values(item.participants).reduce((s, p) => s + p.men, 0), 0);
-        const women = filteredStats.reduce((sum, item) => sum + Object.values(item.participants).reduce((s, p) => s + p.women, 0), 0);
-        
-        // Summera per deltagartyp dynamiskt (bakåtkompatibel: saknade fält räknas som 0)
+        const genderFilter = filters.gender; // '', 'men', 'women'
+
+        // Totala antal män/kvinnor över alla poster (för könsdiagrammet)
+        let menTotal = 0;
+        let womenTotal = 0;
+
+        // Summering per deltagarkategori (boende/trygghetsboende/externa/nya)
+        // justerad för valt könsfilter (så besökstypsdiagrammet följer könsvalet).
         const totalsByKey = PARTICIPANT_KEYS.reduce((acc, key) => {
-            const t = filteredStats.reduce((sum, item) => {
-                const v = (item.participants && item.participants[key]) || { men: 0, women: 0 };
-                return sum + (v.men || 0) + (v.women || 0);
-            }, 0);
-            acc[key] = t;
+            acc[key] = 0;
             return acc;
         }, {});
 
-        const activityCounts = filteredStats.reduce((acc, item) => {
-            acc[item.activity] = (acc[item.activity] || 0) + item.total_participants;
-            return acc;
-        }, {});
+        // Aktivitetssummeringar:
+        // - activityTotals: totalt antal besökare per aktivitet (påverkas av könsfilter)
+        // - activityOccurrences: antal registrerade tillfällen per aktivitet (påverkas inte av könsfilter)
+        const activityTotals = {};
+        const activityOccurrences = {};
+
+        // Totalsumma besökare (påverkas av könsfilter)
+        let totalVisitors = 0;
+
+        // Daglig summering för linjediagrammet (påverkas av könsfilter)
+        const byDate = {};
+
+        filteredStats.forEach(item => {
+            const participants = item.participants || {};
+
+            let menForEvent = 0;
+            let womenForEvent = 0;
+
+            // Gå igenom alla definierade deltagarkategorier för att säkerställa
+            // konsekvent hantering även om vissa saknas i en enskild post.
+            PARTICIPANT_KEYS.forEach(key => {
+                const v = participants[key] || { men: 0, women: 0 };
+                const menVal = Number(v.men) || 0;
+                const womenVal = Number(v.women) || 0;
+
+                menForEvent += menVal;
+                womenForEvent += womenVal;
+
+                // För besökstyper aggregerar vi enligt könsfiltret.
+                const valueForCategory =
+                    genderFilter === 'men' ? menVal :
+                    genderFilter === 'women' ? womenVal :
+                    menVal + womenVal;
+
+                totalsByKey[key] += valueForCategory;
+            });
+
+            menTotal += menForEvent;
+            womenTotal += womenForEvent;
+
+            // Värdet som ska användas för "den valda könsgruppen" i övrig statistik.
+            const valueForEvent =
+                genderFilter === 'men' ? menForEvent :
+                genderFilter === 'women' ? womenForEvent :
+                menForEvent + womenForEvent;
+
+            totalVisitors += valueForEvent;
+
+            const activityName = item.activity || 'Okänd aktivitet';
+
+            // Totalt antal besökare per aktivitet (för "Populäraste aktiviteterna")
+            activityTotals[activityName] = (activityTotals[activityName] || 0) + valueForEvent;
+
+            // Antal registrerade tillfällen per aktivitet (för snittlistan).
+            activityOccurrences[activityName] = (activityOccurrences[activityName] || 0) + 1;
+
+            // Summor per datum för linjediagrammet.
+            const d = item.date;
+            if (d) {
+                byDate[d] = (byDate[d] || 0) + valueForEvent;
+            }
+        });
 
         const occurrences = filteredStats.length;
 
-        // Aggregate totals per day
-        const byDate = filteredStats.reduce((acc, item) => {
-            const d = item.date;
-            acc[d] = (acc[d] || 0) + (item.total_participants || 0);
-            return acc;
-        }, {});
-
-        // Generate a continuous date range from filters.from to filters.to and fill zeros
+        // Bygg en sammanhängande tidsserie från from–to och fyll upp med nollor
+        // för datum som saknas i datat.
         const series = [];
         try {
             const start = new Date(filters.from);
@@ -138,22 +207,44 @@ const Dashboard = () => {
                 series.push({ date: iso, visitors: byDate[iso] || 0 });
             }
         } catch (e) {
-            // If date parse fails, fallback to keys present in byDate
+            // Om datumparsning misslyckas – bygg serie endast utifrån befintliga datum.
             Object.keys(byDate).sort().forEach(k => series.push({ date: k, visitors: byDate[k] }));
         }
+
+        // Lista för totalvolym per aktivitet (påverkad av könsfilter)
+        const popularActivitiesAllList = Object.entries(activityTotals)
+            .map(([name, value]) => ({ name, value }))
+            .sort((a, b) => b.value - a.value);
+
+        // Lista för snitt per aktivitet:
+        // genomsnittligt antal deltagare per tillfälle (heltal, avrundat).
+        const popularActivitiesAvgList = Object.entries(activityOccurrences)
+            .map(([name, occ]) => {
+                const totalForActivity = activityTotals[name] || 0;
+                const avg = occ > 0 ? totalForActivity / occ : 0;
+                return {
+                    name,
+                    value: Math.round(avg),
+                };
+            })
+            .sort((a, b) => b.value - a.value);
+
         return {
             kpi: {
-                total,
-                avg: (occurrences > 0 ? (total / occurrences) : 0).toFixed(1),
-                unique: Object.keys(activityCounts).length,
+                total: totalVisitors,
+                avg: (occurrences > 0 ? (totalVisitors / occurrences) : 0).toFixed(1),
+                unique: Object.keys(activityTotals).length,
                 occurrences,
             },
-            genderData: [{ name: 'Män', value: men }, { name: 'Kvinnor', value: women }],
+            // Könsdiagrammet visar alltid fördelningen mellan män/kvinnor inom de valda
+            // datafiltrena (träffpunkt, datum, aktiviteter, tid), oberoende av könsfilter.
+            genderData: [{ name: 'Män', value: menTotal }, { name: 'Kvinnor', value: womenTotal }],
             visitorTypeData: PARTICIPANT_KEYS.map(k => ({ name: PARTICIPANT_LABELS[k], value: totalsByKey[k] })),
-            popularActivitiesAll: Object.entries(activityCounts).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value),
+            popularActivitiesAll: popularActivitiesAllList,
+            popularActivitiesAvg: popularActivitiesAvgList,
             dailySeries: series,
         };
-    }, [filteredStats, filters.from, filters.to]);
+    }, [filteredStats, filters.from, filters.to, filters.gender]);
 
     const COLORS = ['#831f82', '#a94aa8', '#5c1659', '#c77dce'];
     const VISITOR_COLORS = {
@@ -206,6 +297,16 @@ const Dashboard = () => {
                             <MenuItem value="fm">Förmiddag</MenuItem>
                             <MenuItem value="em">Eftermiddag</MenuItem>
                             <MenuItem value="kv">Kväll</MenuItem>
+                        </Select>
+                    </FormControl>
+                </div>
+                <div className="filter-item">
+                    <FormControl fullWidth>
+                        <InputLabel>Kön</InputLabel>
+                        <Select name="gender" value={filters.gender} label="Kön" onChange={handleFilterChange}>
+                            <MenuItem value=""><em>Alla</em></MenuItem>
+                            <MenuItem value="men">Endast män</MenuItem>
+                            <MenuItem value="women">Endast kvinnor</MenuItem>
                         </Select>
                     </FormControl>
                 </div>
@@ -267,6 +368,25 @@ const Dashboard = () => {
                             <YAxis type="category" dataKey="name" interval={0} width={showAllPopular ? 180 : 150} />
                             <Tooltip />
                             <Bar dataKey="value" fill="var(--primary-purple)" name="Antal besökare">
+                                <LabelList dataKey="value" position="right" />
+                            </Bar>
+                        </BarChart>
+                    </ResponsiveContainer>
+                </div>
+                <div className="chart-card card full-width">
+                    <div className="chart-card-header">
+                        <h3>Mest välbesökta i genomsnitt</h3>
+                        <Button size="small" variant="outlined" onClick={() => setShowAllPopularAvg(v => !v)}>
+                            {showAllPopularAvg ? 'Visa färre' : 'Visa fler'}
+                        </Button>
+                    </div>
+                    <ResponsiveContainer width="100%" height={300}>
+                        <BarChart data={(showAllPopularAvg ? popularActivitiesAvg.slice(0, 10) : popularActivitiesAvg.slice(0, 5))} layout="vertical">
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis type="number" />
+                            <YAxis type="category" dataKey="name" interval={0} width={showAllPopularAvg ? 180 : 150} />
+                            <Tooltip />
+                            <Bar dataKey="value" fill="var(--primary-purple)" name="Genomsnittligt antal besökare">
                                 <LabelList dataKey="value" position="right" />
                             </Bar>
                         </BarChart>
