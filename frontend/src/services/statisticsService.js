@@ -41,16 +41,20 @@ const createApiService = (request) => async (msalInstance, account, ...args) => 
     }
 };
 
-export const getTraffpunkter = createApiService((headers) => 
-    axios.get(API_ENDPOINTS.TRAFFPUNKTER, { headers })
+export const getHomes = createApiService((headers) =>
+    axios.get(API_ENDPOINTS.ALDREBOENDEN, { headers })
 );
 
 export const getActivities = createApiService((headers) => 
     axios.get(API_ENDPOINTS.ACTIVITIES, { headers })
 );
 
-export const registerAttendance = createApiService((headers, data) => 
-    axios.post(API_ENDPOINTS.ATTENDANCE, data, { headers })
+export const getCompanions = createApiService((headers) =>
+    axios.get(API_ENDPOINTS.COMPANIONS, { headers })
+);
+
+export const registerVisit = createApiService((headers, data) => 
+    axios.post(API_ENDPOINTS.VISITS, data, { headers })
 );
 
 export const getStatistics = createApiService((headers, filters) => {
@@ -58,12 +62,15 @@ export const getStatistics = createApiService((headers, filters) => {
     const params = {};
     if (filters?.from) params.from = filters.from;
     if (filters?.to) params.to = filters.to;
-    if (filters?.traffpunkt_id) params.traffpunkt = filters.traffpunkt_id;
+    if (filters?.home_id) params.home = filters.home_id;
+    if (filters?.department_id) params.department = filters.department_id;
+    if (filters?.offer_status) params.offer_status = filters.offer_status;
+    if (filters?.visit_type) params.visit_type = filters.visit_type;
     return axios.get(API_ENDPOINTS.STATISTICS, { headers, params });
 });
 
-export const addTraffpunkt = createApiService((headers, data) => 
-    axios.post(API_ENDPOINTS.TRAFFPUNKTER, data, { headers })
+export const addHome = createApiService((headers, data) =>
+    axios.post(API_ENDPOINTS.ALDREBOENDEN, data, { headers })
 );
 
 export const addActivity = createApiService((headers, data) => 
@@ -76,4 +83,28 @@ export const updateActivity = createApiService((headers, { id, name }) =>
 
 export const deleteActivity = createApiService((headers, { id }) => 
     axios.delete(API_ENDPOINTS.ACTIVITY_ITEM(id), { headers })
+);
+
+export const addDepartment = createApiService((headers, { homeId, name }) =>
+    axios.post(API_ENDPOINTS.DEPARTMENTS(homeId), { name }, { headers })
+);
+
+export const updateDepartment = createApiService((headers, { homeId, departmentId, name, active }) =>
+    axios.put(API_ENDPOINTS.DEPARTMENT_ITEM(homeId, departmentId), { name, active }, { headers })
+);
+
+export const deleteDepartment = createApiService((headers, { homeId, departmentId }) =>
+    axios.delete(API_ENDPOINTS.DEPARTMENT_ITEM(homeId, departmentId), { headers })
+);
+
+export const addCompanion = createApiService((headers, data) =>
+    axios.post(API_ENDPOINTS.COMPANIONS, data, { headers })
+);
+
+export const updateCompanion = createApiService((headers, { id, name }) =>
+    axios.put(API_ENDPOINTS.COMPANION_ITEM(id), { name }, { headers })
+);
+
+export const deleteCompanion = createApiService((headers, { id }) =>
+    axios.delete(API_ENDPOINTS.COMPANION_ITEM(id), { headers })
 );

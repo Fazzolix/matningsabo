@@ -1,58 +1,60 @@
-# Träffpunktsstatistik - Skövde kommun
+# SÄBO – Utevistelser
 
-Digital plattform för insamling och visualisering av besöksstatistik från kommunens träffpunkter.
+Digital plattform för att registrera och analysera utevistelser på Skövdes särskilda boenden.
 
 ## 🎯 Funktioner
+- **Registrera utevistelser** – mobilanpassat formulär med könsfördelning, status (ja/nej), aktivitet, med vem, varaktighet och nöjdhet.
+- **Mina utevistelser** – se, ändra och ta bort dina egna poster.
+- **Dashboard** – trender, könsfördelning, populära aktiviteter/avdelningar och tidslinje.
+- **Admin** – hantera äldreboenden/avdelningar, aktiviteter och “med vem”.
+- **Roller** – superadmin sätter admin‑rättigheter; admin hanterar masterdata. Azure AD för inloggning.
 
-- **Enkel registrering** – Snabb inmatning av besöksdata via mobilanpassat formulär
-- **Mina registreringar** – Se och revidera egna registreringar (senaste veckan som standard), med redigera/ta bort
-- **Realtidsstatistik** – Dashboard med aktuella nyckeltal och trender
-- **Flexibel filtrering** – Analysera data per träffpunkt, tidsperiod och aktivitet
-- **Rollbaserad admin** – Superadmin (via env) kan ge/tar bort admin‑rättigheter; admin kan lägga till, byta namn på och ta bort aktiviteter samt lägga till träffpunkter
-- **Säker inloggning** – Azure AD med redirect‑flöde (fungerar på mobil och desktop)
-
-## 🚀 Snabbstart
+## 🚀 Kom igång
 
 ### Förutsättningar
-- Node.js (v18+)
-- Python (3.11+)
-- Azure‑konto (Container Apps + Cosmos DB)
-- Azure AD app-registrering
+- Node.js 18+
+- Python 3.11+
+- Azure AD app‑registrering (redirect till backend‑URL)
+- Azure Cosmos DB for NoSQL (kontot kan vara tomt – appen skapar containers)
 
 ### Installation
-
-1. Klona repot:
+1) Klona repot
 ```bash
 git clone <repo-url>
-cd traffpunkt-statistik
+cd matningsabo
 ```
-
-2. Installera backend:
+2) Backend
 ```bash
 cd backend
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
-
-3. Installera :) frontend:
+3) Frontend
 ```bash
 cd ../frontend
 npm install
 ```
-
-4. Konfigurera miljövariabler:
+4) Miljövariabler (backend/.env)
 ```bash
-# backend/.env
 SECRET_KEY=<hemlig-nyckel>
 AZURE_CLIENT_ID=<azure-app-id>
 AZURE_TENANT_ID=<azure-tenant-id>
 FRONTEND_URL=http://localhost:3000
 SUPERADMIN_EMAIL=<din.epost@skovde.se>
-GOOGLE_APPLICATION_CREDENTIALS=<sökväg-till-service-account.json>
+COSMOS_ENDPOINT=<https://ditt-cosmos.documents.azure.com:443/>
+COSMOS_KEY=<primar-nyckel>
+# valfria/har rimliga default-värden:
+COSMOS_DATABASE=sabo
+COSMOS_CONTAINER_VISITS=outdoor_visits
+COSMOS_CONTAINER_ACTIVITIES=activities
+COSMOS_CONTAINER_HOMES=homes
+COSMOS_CONTAINER_COMPANIONS=companions
+COSMOS_CONTAINER_USERS=users_sabo
+COSMOS_CONTAINER_ADMIN_AUDIT=admin_audit_sabo
+COSMOS_CONTAINER_VISIT_AUDIT=visit_audit_sabo
 ```
-
-5. Starta utvecklingsservrar:
+5) Kör lokalt
 ```bash
 # Terminal 1
 cd backend
@@ -62,219 +64,54 @@ flask run --port 10000
 cd frontend
 npm start
 ```
+Frontend proxar /api till Flask på port 10000.
 
 ## 🏗️ Arkitektur
+- **Frontend**: React (CRA), Material UI, MSAL (redirect‑flow), Recharts.
+- **Backend**: Flask, Gunicorn, säkra cookies för sessioner, rate limiting och säkerhetsheaders.
+- **Databas**: Azure Cosmos DB (SQL API). Partitioner:
+  - `outdoor_visits`: `/home_id`
+  - `activities`, `homes`, `companions`, `users_sabo`, `admin_audit_sabo`, `visit_audit_sabo`: `/id`
+- **Auth**: Azure AD (Graph-token valideras i backend).
 
-- **Frontend**: React, Material‑UI, MSAL (redirect‑flow, BrowserRouter)
-- **Backend**: Flask, Gunicorn, Flask-Session
-- **Databas**: Azure Cosmos DB (NoSQL/SQL‑API)
-- **Autentisering**: Azure AD
-- **Hosting**: Azure Container Apps
+## 📊 Datamodell (huvuddrag)
+- **homes**: `id` (slug), `name`, `address`, `description`, `active`, `departments` (lista med `id`, `slug`, `name`, `active`, `created_at`).
+- **activities**: `id`, `name`, `category`, `sort_order`, `description`, `active`, `created_at`.
+- **companions**: `id`, `name`, `active`, `created_at`.
+- **outdoor_visits**: `id`, `home_id`, `department_id`, `date`, `visit_type` (`group`/`individual`), `offer_status` (`accepted`/`declined`), `gender_counts` {men, women}, `total_participants`, `activity`/`activity_id`, `companion`/`companion_id`, `duration_minutes`, `satisfaction_entries` [{gender, rating 1‑6}], `registered_by`, `registered_by_oid`, `registered_at`, `last_modified_at`, `edit_count`.
+- **users_sabo**: `id` (Azure oid), `email`, `display_name`, `roles.admin`, `created_at`, `last_login_at`.
+- **Audits**: `admin_audit_sabo` (rolländringar), `visit_audit_sabo` (update/delete av besök).
 
-## 📊 Datamodell
+## 🔌 API (aktuella endpoints)
+- Auth/roll: `GET /api/me`, `GET/POST /api/azure-user`, `GET /api/azure-config`
+- Homes: `GET /api/aldreboenden`, `POST /api/aldreboenden` (admin)
+- Departments: `POST /api/aldreboenden/:id/departments` (admin), `PUT`/`DELETE` för en avdelning
+- Aktiviteter: `GET /api/activities`, `POST`/`PUT`/`DELETE` (admin)
+- Med vem: `GET /api/companions`, `POST`/`PUT`/`DELETE` (admin)
+- Statistik: `GET /api/statistics?home=&from=&to=&department=&activity=&companion=&offer_status=&visit_type=`
+- Utevistelser: `POST /api/visits`, `GET /api/visits/:id`, `PUT /api/visits/:id`, `DELETE /api/visits/:id`
+- Mina utevistelser: `GET /api/my-visits?from=&to=`
+- Admin roller (superadmin): `GET /api/admin/users`, `PUT /api/admin/users/:id/role`
 
-### Träffpunkter
-- ID, namn, adress, aktiv status
+## 🚢 Deploy (Azure Container Apps)
+1) Bygg och pusha image (ACR eller Docker Hub)
+```bash
+docker build -t sabo-utevistelser:latest .
+docker tag sabo-utevistelser:latest <registry>/sabo-utevistelser:latest
+docker push <registry>/sabo-utevistelser:latest
+```
+2) Skapa Container App (Portal eller CLI) med env/secrets enligt listan ovan. Appen skapar databasen/containers om de saknas.
+3) Ingress: external, port 8080. `FRONTEND_URL` ska matcha den externa URL:en (eller separat frontend‑domän).
+4) Ny deploy: uppdatera imagen i Container App.
 
-### Närvaroregistreringar (collection `attendance_records`)
-- Träffpunkt (`traffpunkt_id`), datum (`date`), tidsblock (`time_block`: `fm`/`em`/`kv`)
-- Aktivitet (`activity`)
-- Deltagarantal (äldreboende/trygghetsboende/externa/nya, män/kvinnor); beräknad `total_participants`
-  - Anm: Äldreboende lagras internt under nyckeln `boende` för bakåtkompatibilitet; Trygghetsboende använder nyckeln `trygghetsboende`.
-- Registrerad av (`registered_by` e‑post) och tidpunkt (`registered_at`)
-- Ägar‑OID (`registered_by_oid`), senaste ändring (`last_modified_at`), antal redigeringar (`edit_count`)
-
-### Användare och roller
-- `Users_traffpunkt`: docID = Azure `oid`, fält: `email`, `display_name`, `roles: { admin: bool }`, `created_at`, `last_login_at`, `id`
-- `Admin_audit_traffpunkt`: audit vid rolländringar
-
-### Audit för registreringar
-- `Attendance_audit_traffpunkt`: audit för update/delete av närvaroposter
-
-### Aktiviteter
-- ID, namn, kategori, sorteringsordning, `active`
-- Att ta bort en aktivitet inaktiverar den (soft delete via `active=false`). Historiska registreringar ligger kvar, men aktiviteten visas inte längre för ny registrering.
-- Att byta namn på en aktivitet uppdaterar både aktivitetsdokumentet och historiska registreringar så att statistik och filter fortsätter fungera med det nya namnet.
-
-## 🔐 Säkerhet
-
-- Azure AD‑autentisering (redirect‑flöde) krävs för all åtkomst
-- Cookie‑baserade, signerade sessioner (HttpOnly + Secure + SameSite=Lax); stödjer flera repliker utan delad lagring
-- CORS konfigurerat för produktions-URL
-- Cosmos‑åtkomst via konto‑nyckel (lagras som hemlighet i Container Apps)
-- Rollkontroll i backend: `require_admin` skyddar skriv‑endpoints för aktiviteter/träffpunkter, `require_superadmin` skyddar admin‑API för rollhantering
-- Ratelimits på API, striktare på admin‑endpoints
-
-## 👥 Roller & Admin
-
-- `SUPERADMIN_EMAIL` anger första superadmin (miljövariabel). Superadmin kan inte ändras via UI.
-- Superadmin kan i Admin → “Rollhantering” söka upp användare (via e‑post) och slå på/av admin per användare.
-- Admin (och superadmin) kan lägga till nya aktiviteter och träffpunkter.
-
-## 🧑‍💻 Mina registreringar (Revidera)
-
-- Ny flik “Mina registreringar” visar senaste 7 dagarna (bläddra vecka fram/bak).
-- Klicka på en registrering för att redigera alla fält; spara uppdaterar samma dokument.
-- “Ta bort” finns med bekräftelse. Endast egna registreringar kan ändras/tas bort.
-
-## 🔌 API (nya endpoints)
-
-- `GET /api/me` → `{ email, display_name, is_superadmin, is_admin }`
-- `GET /api/admin/users?q=&limit=` (superadmin)
-- `PUT /api/admin/users/:id/role` body `{ admin: boolean }` (superadmin)
-- `GET /api/my-attendance?from=YYYY-MM-DD&to=YYYY-MM-DD` → egna registreringar (sammanfattning)
-- `GET /api/attendance/:id` → full post (endast ägare)
-- `PUT /api/attendance/:id` → uppdatera (endast ägare)
-- `DELETE /api/attendance/:id` → ta bort (endast ägare)
- - `GET /api/activities` → aktiva aktiviteter (admin krävs ej för läsning, kräver auth)
- - `POST /api/activities` (admin) → lägg till aktivitet
- - `PUT /api/activities/:id` (admin) → byt namn på aktivitet, uppdaterar historiska registreringar
- - `DELETE /api/activities/:id` (admin) → inaktivera aktivitet (soft delete)
-## 🚢 Deployment (Azure)
-
-Detta är den nya målmiljön: Azure Container Apps + Cosmos DB.
-
-1. Bygg och tagga image
-   ```bash
-   docker build -t traffpunkt-statistik .
-   docker tag traffpunkt-statistik <registry>/traffpunkt-statistik:latest
-   ```
-
-2. Pusha image till registry (ACR eller Docker Hub)
-   ```bash
-   docker push <registry>/traffpunkt-statistik:latest
-   ```
-
-3. Skapa resurser och Container App (exempel via ACR)
-   ```bash
-   az login
-   az account set --subscription <SUBSCRIPTION_ID>
-   az group create -n rg-traffpunkt -l westeurope
-   az cosmosdb create -g rg-traffpunkt -n traffpunkt-cosmos --kind GlobalDocumentDB
-   az cosmosdb sql database create -a traffpunkt-cosmos -g rg-traffpunkt -n traffpunkt
-   # Containers (partitioner enligt migrationsplan)
-   az cosmosdb sql container create -a traffpunkt-cosmos -g rg-traffpunkt -d traffpunkt -n attendance_records --partition-key-path "/traffpunkt_id" --throughput 400
-   az cosmosdb sql container create -a traffpunkt-cosmos -g rg-traffpunkt -d traffpunkt -n activities --partition-key-path "/id" --throughput 400
-   az cosmosdb sql container create -a traffpunkt-cosmos -g rg-traffpunkt -d traffpunkt -n traffpunkter --partition-key-path "/id" --throughput 400
-   az cosmosdb sql container create -a traffpunkt-cosmos -g rg-traffpunkt -d traffpunkt -n Users_traffpunkt --partition-key-path "/id" --throughput 400
-   az cosmosdb sql container create -a traffpunkt-cosmos -g rg-traffpunkt -d traffpunkt -n Admin_audit_traffpunkt --partition-key-path "/id" --throughput 400
-   az cosmosdb sql container create -a traffpunkt-cosmos -g rg-traffpunkt -d traffpunkt -n Attendance_audit_traffpunkt --partition-key-path "/id" --throughput 400
-
-   az containerapp env create -g rg-traffpunkt -n traffpunkt-env -l westeurope
-
-   COSMOS_ENDPOINT=$(az cosmosdb show -n traffpunkt-cosmos -g rg-traffpunkt --query documentEndpoint -o tsv)
-   COSMOS_KEY=$(az cosmosdb keys list -n traffpunkt-cosmos -g rg-traffpunkt --type keys --query primaryMasterKey -o tsv)
-
-   az containerapp create -g rg-traffpunkt -n traffpunkt-api \
-     --environment traffpunkt-env \
-     --image <registry>/traffpunkt-statistik:latest \
-     --ingress external --target-port 8080 \
-     --env-vars \
-       SECRET_KEY=generate_me \
-       AZURE_CLIENT_ID=<your_azure_app_id> \
-       AZURE_TENANT_ID=<your_tenant_id> \
-       FRONTEND_URL=https://<your-frontend-host> \
-       SUPERADMIN_EMAIL=<email@skovde.se> \
-       COSMOS_DATABASE=traffpunkt \
-       COSMOS_CONTAINER_ATTENDANCE=attendance_records \
-       COSMOS_CONTAINER_ACTIVITIES=activities \
-       COSMOS_CONTAINER_TRAFFPUNKTER=traffpunkter \
-       COSMOS_CONTAINER_USERS=Users_traffpunkt \
-       COSMOS_CONTAINER_ADMIN_AUDIT=Admin_audit_traffpunkt \
-       COSMOS_CONTAINER_ATTENDANCE_AUDIT=Attendance_audit_traffpunkt \
-     --secrets COSMOS_ENDPOINT=$COSMOS_ENDPOINT COSMOS_KEY=$COSMOS_KEY \
-     --env-secret-ref COSMOS_ENDPOINT=COSMOS_ENDPOINT COSMOS_KEY=COSMOS_KEY
-   ```
-
-4. Uppdatera revision med ny image vid behov
-   ```bash
-   az containerapp update -g rg-traffpunkt -n traffpunkt-api --image <registry>/traffpunkt-statistik:latest
-   ```
-
-Se även den fullständiga planen i `AZURE_MIGRATIONSPLAN.md`.
-
-## ☁️ Cloud Run (Legacy)
-
-Tidigare deployment till Google Cloud Run (behåll tills Azure‑miljön är verifierad):
-
-1.  Bygg Docker‑image:
-    ```bash
-    docker build -t traffpunkt-statistik .
-    ```
-
-2.  Tagga för GCR:
-    ```bash
-    docker tag traffpunkt-statistik gcr.io/froga-elin/traffpunkt-statistik
-    ```
-
-3.  Pusha image:
-    ```bash
-    docker push gcr.io/froga-elin/traffpunkt-statistik
-    ```
-
-4.  Deploy till Cloud Run:
-    ```bash
-    gcloud run deploy traffpunkt --image gcr.io/froga-elin/traffpunkt-statistik --platform managed --region europe-west1 --allow-unauthenticated
-    ```
-
-## 📝 Miljövariabler
-
-| Variabel | Beskrivning |
-|---|---|
-| `SECRET_KEY` | Flask session-nyckel |
-| `AZURE_CLIENT_ID` | Azure AD app ID |
-| `AZURE_TENANT_ID` | Azure AD tenant ID |
-| `FRONTEND_URL` | Frontend URL för CORS |
-| `SUPERADMIN_EMAIL` | E‑post för första superadmin |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Lokal utveckling mot Firestore (legacy) |
-| `COSMOS_ENDPOINT` | Cosmos DB endpoint (hemlighet i Azure) |
-| `COSMOS_KEY` | Cosmos DB primär nyckel (hemlighet i Azure) |
-| `COSMOS_DATABASE` | Cosmos DB databasnamn, t.ex. `traffpunkt` |
-| `COSMOS_CONTAINER_ATTENDANCE` | Container för närvaroposter |
-| `COSMOS_CONTAINER_ACTIVITIES` | Container för aktiviteter |
-| `COSMOS_CONTAINER_TRAFFPUNKTER` | Container för träffpunkter |
-| `COSMOS_CONTAINER_USERS` | Container för användare/roller |
-| `COSMOS_CONTAINER_ADMIN_AUDIT` | Container för admin‑audit |
-| `COSMOS_CONTAINER_ATTENDANCE_AUDIT` | Container för attendance‑audit |
-| `PORT` | Port (sätts av Cloud Run) |
+## ✅ Vad som togs bort
+- Firestore‑kod och env beroenden.
+- Legacy “träffpunkt”‑navigering/containrar; alla namn matchar nu äldreboende/utebesök.
+- Cloud Run‑instruktioner.
 
 ## 🤝 Bidra
-
 1. Skapa en feature branch
-2. Gör dina ändringar
+2. Gör ändringar
 3. Skapa en pull request
 
-## 📄 Licens
-
 © 2025 Skövde kommun
-
----
-
-## Initial Data (Cosmos DB)
-
-För att komma igång kan du lägga till några initiala `traffpunkter` via Admin‑sidan i appen. Alternativt kan du skapa dem direkt i Cosmos DB.
-
-### Container `traffpunkter`
-
-Appen tillhandahåller en Admin‑sida (`/admin`) för att lägga till och hantera träffpunkter dynamiskt.
-
-Om du vill skapa dem manuellt i Cosmos (NoSQL): lägg till ett dokument per träffpunkt i containern `traffpunkter`. Dokumentets `id` ska vara en URL‑vänlig version av namnet (t.ex. `bagaren`).
-
-Exempel:
-- `id`: `bagaren`
-- `name`: "Bagaren"
-- `active`: `true`
-- `address`: ""
-- `description`: ""
-- `created_at`: ISO‑sträng, t.ex. `2025-01-01T12:00:00Z`
-
-**Example Träffpunkter:**
-- Bagaren
-- Aspen
-- Ekedal
-- Hentorp
-- Ryd
-
-### `activities` collection
-
-This collection is now managed automatically. When a user enters a new activity in the registration form, it will be added to this collection. You do not need to add any activities manually.

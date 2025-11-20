@@ -1,6 +1,6 @@
 # Repository Guidelines
 
-This repository powers Skövde’s Träffpunktsstatistik service: a React frontend and a Flask API, deployed to Cloud Run with Firestore and Azure AD.
+This repository powers Skövde’s SÄBO – Statistik service: a React frontend and a Flask API, deployed to Cloud Run with Firestore and Azure AD.
 
 ## Project Structure & Module Organization
 - `backend/`: Flask app (`app.py`), Cosmos DB access (`cosmos_service.py`), auth (`auth_utils*.py`), security and validation utilities (`security*.py`, `validators.py`), Gunicorn config.

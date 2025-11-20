@@ -1,608 +1,590 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { getTraffpunkter, getActivities, registerAttendance } from '../services/statisticsService';
+import { getHomes, getActivities, getCompanions, registerVisit } from '../services/statisticsService';
 import { toISODateString } from '../utils/dateHelpers';
-import { PARTICIPANT_KEYS, PARTICIPANT_LABELS, makeEmptyParticipants } from '../config/participants';
 import {
-    Box,
-    Card,
-    CardContent,
-    Typography,
-    TextField,
-    Select,
-    MenuItem,
-    FormControl,
-    InputLabel,
-    RadioGroup,
-    FormControlLabel,
-    Radio,
-    Button,
-    Grid,
-    Alert,
-    CircularProgress,
-    Autocomplete,
-    useTheme,
-    useMediaQuery,
-    Paper,
-    InputAdornment,
-    Divider,
-    Chip,
-    Stack,
-    IconButton
+  makeEmptyGenderCounts,
+  ensureGenderCounts,
+  GENDER_OPTIONS,
+  OFFER_STATUS,
+  VISIT_TYPES,
+  SATISFACTION_MAX,
+  SATISFACTION_MIN,
+} from '../config/participants';
+import {
+  Alert,
+  Autocomplete,
+  Box,
+  Button,
+  Card,
+  CardContent,
+  Chip,
+  CircularProgress,
+  Divider,
+  FormControl,
+  FormControlLabel,
+  Grid,
+  IconButton,
+  InputAdornment,
+  InputLabel,
+  MenuItem,
+  Paper,
+  Radio,
+  RadioGroup,
+  Rating,
+  Select,
+  Stack,
+  TextField,
+  Typography,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
 import {
-    People as PeopleIcon,
-    Man as ManIcon,
-    Woman as WomanIcon,
-    CalendarToday as CalendarIcon,
-    LocationOn as LocationOnIcon,
-    Event as EventIcon,
-    Send as SendIcon,
-    Add as AddIcon,
-    Remove as RemoveIcon
+  AccessTime as AccessTimeIcon,
+  CalendarToday as CalendarIcon,
+  Delete as DeleteIcon,
+  Event as EventIcon,
+  Group as GroupIcon,
+  Man as ManIcon,
+  Person as PersonIcon,
+  Woman as WomanIcon,
 } from '@mui/icons-material';
 
-const NumberInput = ({ value, onChange, label, icon, isMobile }) => {
-    const intervalRef = useRef(null);
-    const timeoutRef = useRef(null);
-    const [isHolding, setIsHolding] = React.useState(false);
+const NumberInput = ({ label, value, onChange, icon }) => (
+  <TextField
+    type="number"
+    label={label}
+    value={value}
+    onChange={(e) => {
+      const parsed = parseInt(e.target.value || '0', 10);
+      const safeValue = Number.isNaN(parsed) ? 0 : Math.max(0, parsed);
+      onChange(safeValue);
+    }}
+    fullWidth
+    inputProps={{ min: 0 }}
+    InputProps={{
+      startAdornment: icon ? (
+        <InputAdornment position="start">
+          {icon}
+        </InputAdornment>
+      ) : null,
+    }}
+  />
+);
 
-    const handleIncrement = () => {
-        onChange(value + 1);
-    };
-
-    const handleDecrement = () => {
-        if (value > 0) {
-            onChange(value - 1);
-        }
-    };
-
-    const startHolding = (action) => {
-        setIsHolding(true);
-        action();
-        
-        // Start with single increment after 500ms
-        timeoutRef.current = setTimeout(() => {
-            // Then repeat every 100ms for fast increment
-            intervalRef.current = setInterval(() => {
-                action();
-            }, 100);
-        }, 500);
-    };
-
-    const stopHolding = () => {
-        setIsHolding(false);
-        if (timeoutRef.current) {
-            clearTimeout(timeoutRef.current);
-        }
-        if (intervalRef.current) {
-            clearInterval(intervalRef.current);
-        }
-    };
-
-    useEffect(() => {
-        return () => {
-            if (timeoutRef.current) clearTimeout(timeoutRef.current);
-            if (intervalRef.current) clearInterval(intervalRef.current);
-        };
-    }, []);
-
-    return (
-        <Box sx={{ width: '100%' }}>
-            <Typography variant="caption" color="text.secondary" sx={{ mb: 0.5, display: 'block' }}>
-                {label}
-            </Typography>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, width: '100%' }}>
-                {icon}
-                <Box
-                    sx={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        border: 1,
-                        borderColor: 'divider',
-                        borderRadius: 3,
-                        backgroundColor: 'background.paper',
-                        flex: 1,
-                        minWidth: 0,
-                        overflow: 'hidden',
-                        transition: 'all 0.2s',
-                        '&:focus-within': {
-                            borderColor: 'primary.main',
-                            boxShadow: theme => `0 0 0 2px ${theme.palette.primary.main}25`
-                        }
-                    }}
-                >
-                    <IconButton
-                        onPointerDown={(e) => { e.preventDefault(); startHolding(handleDecrement); }}
-                        onPointerUp={stopHolding}
-                        onPointerLeave={stopHolding}
-                        onPointerCancel={stopHolding}
-                        disabled={value === 0}
-                        sx={{
-                            borderRadius: '12px 0 0 12px',
-                            p: isMobile ? 1.5 : 1,
-                            '&:hover': {
-                                backgroundColor: 'action.hover'
-                            },
-                            '&:active': {
-                                transform: 'scale(0.95)'
-                            },
-                            transition: 'all 0.15s',
-                            minWidth: isMobile ? 56 : 48
-                        }}
-                    >
-                        <RemoveIcon fontSize={isMobile ? "medium" : "small"} />
-                    </IconButton>
-                    
-                    <TextField
-                        value={value}
-                        onChange={(e) => {
-                            const val = e.target.value;
-                            const num = val === '' ? 0 : parseInt(val, 10);
-                            if (!isNaN(num) && num >= 0) {
-                                onChange(num);
-                            }
-                        }}
-                        inputProps={{
-                            min: 0,
-                            style: {
-                                textAlign: 'center',
-                                MozAppearance: 'textfield',
-                                fontSize: isMobile ? '1.2rem' : '1rem',
-                                fontWeight: 500
-                            }
-                        }}
-                        sx={{
-                            flex: 1,
-                            '& .MuiOutlinedInput-root': {
-                                border: 'none',
-                                '& fieldset': {
-                                    border: 'none',
-                                },
-                            },
-                            '& input[type=number]': {
-                                MozAppearance: 'textfield',
-                            },
-                            '& input[type=number]::-webkit-outer-spin-button': {
-                                WebkitAppearance: 'none',
-                                margin: 0,
-                            },
-                            '& input[type=number]::-webkit-inner-spin-button': {
-                                WebkitAppearance: 'none',
-                                margin: 0,
-                            }
-                        }}
-                    />
-                    
-                    <IconButton
-                        onPointerDown={(e) => { e.preventDefault(); startHolding(handleIncrement); }}
-                        onPointerUp={stopHolding}
-                        onPointerLeave={stopHolding}
-                        onPointerCancel={stopHolding}
-                        sx={{
-                            borderRadius: '0 12px 12px 0',
-                            p: isMobile ? 1.5 : 1,
-                            backgroundColor: 'primary.main',
-                            color: 'primary.contrastText',
-                            '&:hover': {
-                                backgroundColor: 'primary.dark'
-                            },
-                            '&:active': {
-                                transform: 'scale(0.95)'
-                            },
-                            transition: 'all 0.15s',
-                            minWidth: isMobile ? 56 : 48
-                        }}
-                    >
-                        <AddIcon fontSize={isMobile ? "medium" : "small"} />
-                    </IconButton>
-                </Box>
-            </Box>
-        </Box>
-    );
-};
-
-const ParticipantInput = ({ label, value, onChange, icon }) => {
-    const theme = useTheme();
-    const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-
-    const handleChange = (field, val) => {
-        onChange({ ...value, [field]: val });
-    };
-
-    return (
-        <Paper 
-            elevation={0} 
-            sx={{ 
-                p: { xs: 2.5, sm: 3, md: 3.5 }, 
-                border: 1, 
-                borderColor: 'divider',
-                borderRadius: 2,
-                transition: 'all 0.2s',
-                width: '100%',
-                height: '100%',
-                '&:hover': {
-                    borderColor: 'primary.main',
-                    boxShadow: 1
-                }
-            }}
-        >
-            <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
-                {icon}
-                <Typography variant="h6" fontWeight={600} sx={{ ml: 1 }}>
-                    {label}
-                </Typography>
-            </Box>
-            <Stack spacing={3} sx={{ width: '100%' }}>
-                <NumberInput
-                    value={value.men}
-                    onChange={(val) => handleChange('men', val)}
-                    label="Män"
-                    icon={<ManIcon color="action" fontSize="small" />}
-                    isMobile={isMobile}
-                />
-                <NumberInput
-                    value={value.women}
-                    onChange={(val) => handleChange('women', val)}
-                    label="Kvinnor"
-                    icon={<WomanIcon color="action" fontSize="small" />}
-                    isMobile={isMobile}
-                />
-            </Stack>
-            <Box sx={{ mt: 3, display: 'flex', justifyContent: 'center' }}>
-                <Chip 
-                    label={`Totalt: ${value.men + value.women}`} 
-                    size="medium" 
-                    color="primary" 
-                    variant="outlined"
-                    sx={{ fontWeight: 600, fontSize: '1rem' }}
-                />
-            </Box>
-        </Paper>
-    );
-};
+const SatisfactionEntry = ({ entry, onChange, onRemove }) => (
+  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
+    <FormControl fullWidth>
+      <InputLabel>Kön</InputLabel>
+      <Select
+        label="Kön"
+        value={entry.gender}
+        onChange={(e) => onChange({ ...entry, gender: e.target.value })}
+      >
+        {GENDER_OPTIONS.map((option) => (
+          <MenuItem key={option.value} value={option.value}>
+            {option.label}
+          </MenuItem>
+        ))}
+      </Select>
+    </FormControl>
+    <Stack direction="row" spacing={1} alignItems="center">
+      <Typography variant="body2">Nöjdhet</Typography>
+      <Rating
+        value={entry.rating}
+        max={SATISFACTION_MAX}
+        onChange={(_, newValue) => onChange({ ...entry, rating: newValue || SATISFACTION_MIN })}
+      />
+    </Stack>
+    <IconButton onClick={onRemove} color="error">
+      <DeleteIcon />
+    </IconButton>
+  </Stack>
+);
 
 const ResponsiveRegistration = () => {
-    const { msalInstance, user } = useAuth();
-    const theme = useTheme();
-    const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-    const isTablet = useMediaQuery(theme.breakpoints.down('md'));
-    
-    const [traffpunkter, setTraffpunkter] = useState([]);
-    const [activities, setActivities] = useState([]);
-    const [formData, setFormData] = useState({
-        traffpunkt_id: '',
+  const { msalInstance, user } = useAuth();
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+
+  const [homes, setHomes] = useState([]);
+  const [activities, setActivities] = useState([]);
+  const [companions, setCompanions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+  const [success, setSuccess] = useState(null);
+
+  const [formData, setFormData] = useState({
+    home_id: '',
+    department_id: '',
+    date: toISODateString(new Date()),
+    visit_type: VISIT_TYPES.GROUP,
+    offer_status: OFFER_STATUS.ACCEPTED,
+    gender_counts: makeEmptyGenderCounts(),
+    activity_id: '',
+    activity_name: '',
+    companion_id: '',
+    companion_name: '',
+    duration_minutes: 30,
+    satisfaction_entries: [],
+  });
+  const [individualGender, setIndividualGender] = useState('men');
+
+  useEffect(() => {
+    const fetchData = async () => {
+      if (!msalInstance || !user) return;
+      setLoading(true);
+      try {
+        const [homesRes, activitiesRes, companionsRes] = await Promise.all([
+          getHomes(msalInstance, user.account),
+          getActivities(msalInstance, user.account),
+          getCompanions(msalInstance, user.account),
+        ]);
+        setHomes(homesRes.data || []);
+        setActivities(activitiesRes.data || []);
+        setCompanions(companionsRes.data || []);
+        if ((homesRes.data || []).length > 0) {
+          setFormData((prev) => ({ ...prev, home_id: homesRes.data[0].id }));
+        }
+      } catch (err) {
+        setError('Kunde inte ladda data.');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, [msalInstance, user]);
+
+  const selectedHome = useMemo(() => homes.find((h) => h.id === formData.home_id), [homes, formData.home_id]);
+  const availableDepartments = useMemo(
+    () => (selectedHome?.departments || []).filter((dept) => dept.active !== false),
+    [selectedHome]
+  );
+
+  useEffect(() => {
+    if (!availableDepartments.length) {
+      setFormData((prev) => ({ ...prev, department_id: '' }));
+    } else if (!availableDepartments.find((dept) => dept.id === formData.department_id)) {
+      setFormData((prev) => ({ ...prev, department_id: availableDepartments[0].id }));
+    }
+  }, [availableDepartments, formData.department_id]);
+
+  const activityOptions = useMemo(() => (activities || []).map((a) => ({ id: a.id, name: a.name })), [activities]);
+  const companionOptions = useMemo(() => (companions || []).map((c) => ({ id: c.id, name: c.name })), [companions]);
+
+  const totalParticipants = useMemo(() => {
+    const counts = ensureGenderCounts(formData.gender_counts);
+    return counts.men + counts.women;
+  }, [formData.gender_counts]);
+
+  useEffect(() => {
+    if (formData.visit_type === VISIT_TYPES.INDIVIDUAL) {
+      setFormData((prev) => ({
+        ...prev,
+        gender_counts:
+          individualGender === 'men'
+            ? { men: 1, women: 0 }
+            : { men: 0, women: 1 },
+        satisfaction_entries: prev.satisfaction_entries.slice(0, 1),
+      }));
+    }
+  }, [formData.visit_type, individualGender]);
+
+  const handleGenderCountChange = (gender, value) => {
+    setFormData((prev) => ({
+      ...prev,
+      gender_counts: { ...prev.gender_counts, [gender]: value },
+    }));
+  };
+
+  const handleFieldChange = (field, value) => {
+    setFormData((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleOfferStatusChange = (value) => {
+    if (value === OFFER_STATUS.DECLINED) {
+      setFormData((prev) => ({
+        ...prev,
+        offer_status: value,
+        activity_id: '',
+        activity_name: '',
+        companion_id: '',
+        companion_name: '',
+        duration_minutes: null,
+        satisfaction_entries: [],
+        gender_counts: ensureGenderCounts({ men: 0, women: 0 }),
+      }));
+    } else {
+      setFormData((prev) => ({ ...prev, offer_status: value, duration_minutes: prev.duration_minutes || 30 }));
+    }
+  };
+
+  const maxSatisfactionEntries = totalParticipants;
+  const canAddSatisfaction = formData.offer_status === OFFER_STATUS.ACCEPTED && formData.satisfaction_entries.length < maxSatisfactionEntries;
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!formData.home_id || !formData.department_id) {
+      setError('Välj äldreboende och avdelning.');
+      return;
+    }
+    if (totalParticipants === 0 && formData.offer_status !== OFFER_STATUS.DECLINED) {
+      setError('Minst en deltagare krävs.');
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const payload = {
+        ...formData,
+        gender_counts: ensureGenderCounts(formData.gender_counts),
+        duration_minutes:
+          formData.offer_status === OFFER_STATUS.ACCEPTED && formData.duration_minutes
+            ? Number(formData.duration_minutes)
+            : null,
+        satisfaction_entries:
+          formData.offer_status === OFFER_STATUS.ACCEPTED
+            ? formData.satisfaction_entries.map((entry) => ({ gender: entry.gender, rating: entry.rating }))
+            : [],
+      };
+      await registerVisit(msalInstance, user.account, payload);
+      setSuccess('Registreringen sparades.');
+      setFormData({
+        ...formData,
         date: toISODateString(new Date()),
-        time_block: 'fm',
-        activity: '',
-        participants: makeEmptyParticipants(),
-    });
-    const [loading, setLoading] = useState(true);
-    const [submitting, setSubmitting] = useState(false);
-    const [error, setError] = useState(null);
-    const [success, setSuccess] = useState(null);
-
-    // Alfabetisk lista över aktivitetsnamn (svensk sortering)
-    const activityOptions = useMemo(() => {
-        return (activities || [])
-            .map(a => a && a.name)
-            .filter(Boolean)
-            .sort((a, b) => a.localeCompare(b, 'sv', { sensitivity: 'base' }));
-    }, [activities]);
-
-    useEffect(() => {
-        const fetchData = async () => {
-            if (!msalInstance || !user) return;
-            try {
-                setLoading(true);
-                const [traffpunkterRes, activitiesRes] = await Promise.all([
-                    getTraffpunkter(msalInstance, user.account),
-                    getActivities(msalInstance, user.account),
-                ]);
-                setTraffpunkter(traffpunkterRes.data);
-                setActivities(activitiesRes.data);
-                if (traffpunkterRes.data.length > 0) {
-                    setFormData(prev => ({ ...prev, traffpunkt_id: traffpunkterRes.data[0].id }));
-                }
-            } catch (err) {
-                setError('Kunde inte ladda nödvändig data. Försök ladda om sidan.');
-            } finally {
-                setLoading(false);
-            }
-        };
-        fetchData();
-    }, [msalInstance, user]);
-
-    const handleInputChange = (e) => {
-        const { name, value } = e.target;
-        setFormData({ ...formData, [name]: value });
-    };
-
-    const handleParticipantChange = (category, values) => {
-        setFormData({
-            ...formData,
-            participants: {
-                ...formData.participants,
-                [category]: values,
-            },
-        });
-    };
-
-    const handleSubmit = async (e) => {
-        e.preventDefault();
-        if (!formData.traffpunkt_id || !formData.activity) {
-            setError('Vänligen fyll i alla obligatoriska fält.');
-            return;
-        }
-        setSubmitting(true);
-        setError(null);
-        setSuccess(null);
-        try {
-            await registerAttendance(msalInstance, user.account, formData);
-            setSuccess('Närvaro har registrerats!');
-            // Reset form
-            setFormData({
-                ...formData,
-                activity: '',
-                participants: makeEmptyParticipants(),
-            });
-        } catch (err) {
-            setError('Kunde inte registrera närvaro. Försök igen.');
-        } finally {
-            setSubmitting(false);
-        }
-    };
-
-    const getTotalParticipants = () => {
-        return PARTICIPANT_KEYS.reduce((sum, key) => {
-            const v = formData.participants?.[key] || { men: 0, women: 0 };
-            return sum + (v.men || 0) + (v.women || 0);
-        }, 0);
-    };
-
-    if (loading) {
-        return (
-            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '50vh' }}>
-                <CircularProgress />
-            </Box>
-        );
+        gender_counts: makeEmptyGenderCounts(),
+        activity_id: '',
+        activity_name: '',
+        companion_id: '',
+        companion_name: '',
+        duration_minutes: 30,
+        satisfaction_entries: [],
+        offer_status: OFFER_STATUS.ACCEPTED,
+        visit_type: VISIT_TYPES.GROUP,
+      });
+      setIndividualGender('men');
+    } catch (err) {
+      setError('Kunde inte spara registreringen.');
+    } finally {
+      setSubmitting(false);
     }
+  };
 
-    if (error && !loading) {
-        return (
-            <Box sx={{ maxWidth: 600, mx: 'auto', mt: 4 }}>
-                <Alert severity="error">{error}</Alert>
-            </Box>
-        );
-    }
-
+  if (loading) {
     return (
-        <Box sx={{ width: '100%' }}>
-            <Typography 
-                variant={isMobile ? "h4" : "h3"} 
-                component="h1" 
-                gutterBottom 
-                sx={{ mb: 4, fontWeight: 700, textAlign: 'center' }}
-            >
-                Registrera Närvaro
-            </Typography>
-
-            <Box sx={{ maxWidth: 1400, mx: 'auto' }}>
-                <form onSubmit={handleSubmit}>
-                    <Stack spacing={4}>
-                        {/* Alert Messages */}
-                        {(success || error) && (
-                            <Box>
-                                {success && (
-                                    <Alert 
-                                        severity="success" 
-                                        onClose={() => setSuccess(null)}
-                                        sx={{ mb: 2 }}
-                                    >
-                                        {success}
-                                    </Alert>
-                                )}
-                                {error && (
-                                    <Alert 
-                                        severity="error" 
-                                        onClose={() => setError(null)}
-                                    >
-                                        {error}
-                                    </Alert>
-                                )}
-                            </Box>
-                        )}
-
-                        {/* Top Section - Träffpunkt and Date */}
-                        <Paper elevation={0} sx={{ p: { xs: 3, md: 4 }, border: 1, borderColor: 'divider' }}>
-                            <Grid container spacing={3}>
-                                <Grid item xs={12} md={6}>
-                                    <FormControl fullWidth required size={isMobile ? "medium" : "large"}>
-                                        <InputLabel>Träffpunkt</InputLabel>
-                                        <Select
-                                            name="traffpunkt_id"
-                                            value={formData.traffpunkt_id}
-                                            onChange={handleInputChange}
-                                            label="Träffpunkt"
-                                            startAdornment={<LocationOnIcon sx={{ mr: 1, color: 'action.active' }} />}
-                                        >
-                                            {traffpunkter.map(t => (
-                                                <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>
-                                            ))}
-                                        </Select>
-                                    </FormControl>
-                                </Grid>
-                                
-                                <Grid item xs={12} md={6}>
-                                    <TextField
-                                        fullWidth
-                                        type="date"
-                                        name="date"
-                                        label="Datum"
-                                        value={formData.date}
-                                        onChange={handleInputChange}
-                                        required
-                                        size={isMobile ? "medium" : "large"}
-                                        InputLabelProps={{ shrink: true }}
-                                        InputProps={{
-                                            startAdornment: (
-                                                <InputAdornment position="start">
-                                                    <CalendarIcon />
-                                                </InputAdornment>
-                                            ),
-                                        }}
-                                    />
-                                </Grid>
-                            </Grid>
-                        </Paper>
-
-                        {/* Time Selection */}
-                        <Paper elevation={0} sx={{ p: { xs: 3, md: 4 }, border: 1, borderColor: 'divider' }}>
-                            <FormControl component="fieldset">
-                                <Typography variant="h6" gutterBottom sx={{ fontWeight: 600 }}>
-                                    Tid på dagen
-                                </Typography>
-                                <RadioGroup
-                                    row
-                                    name="time_block"
-                                    value={formData.time_block}
-                                    onChange={handleInputChange}
-                                    sx={{ mt: 1 }}
-                                >
-                                    <FormControlLabel 
-                                        value="fm" 
-                                        control={<Radio />} 
-                                        label={<Typography variant="body1">Förmiddag</Typography>}
-                                        sx={{ mr: 4 }}
-                                    />
-                                    <FormControlLabel 
-                                        value="em" 
-                                        control={<Radio />} 
-                                        label={<Typography variant="body1">Eftermiddag</Typography>}
-                                        sx={{ mr: 4 }}
-                                    />
-                                    <FormControlLabel 
-                                        value="kv" 
-                                        control={<Radio />} 
-                                        label={<Typography variant="body1">Kväll</Typography>}
-                                    />
-                                </RadioGroup>
-                            </FormControl>
-                        </Paper>
-
-                        {/* Activity Selection - Full Width */}
-                        <Paper elevation={0} sx={{ p: { xs: 3, md: 4 }, border: 1, borderColor: 'divider' }}>
-                            <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>
-                                Aktivitet
-                            </Typography>
-                            <Autocomplete
-                                options={activityOptions}
-                                value={formData.activity}
-                                onChange={(e, newValue) => {
-                                    setFormData({ ...formData, activity: newValue || '' });
-                                }}
-                                fullWidth
-                                size={isMobile ? "medium" : "large"}
-                                renderInput={(params) => (
-                                    <TextField
-                                        {...params}
-                                        fullWidth
-                                        label="Välj aktivitet"
-                                        required
-                                        placeholder="Sök aktivitet..."
-                                        InputProps={{
-                                            ...params.InputProps,
-                                            startAdornment: (
-                                                <>
-                                                    <InputAdornment position="start">
-                                                        <EventIcon color="primary" />
-                                                    </InputAdornment>
-                                                    {params.InputProps.startAdornment}
-                                                </>
-                                            ),
-                                        }}
-                                    />
-                                )}
-                                sx={{
-                                    '& .MuiOutlinedInput-root': {
-                                        fontSize: isMobile ? '1.1rem' : '1.2rem',
-                                    }
-                                }}
-                            />
-                        </Paper>
-
-                        {/* Participants Section */}
-                        <Box>
-                            <Grid container spacing={3}>
-                                {PARTICIPANT_KEYS.map((key) => {
-                                    const colorMap = {
-                                        boende: 'primary',
-                                        trygghetsboende: 'info',
-                                        externa: 'secondary',
-                                        nya: 'success',
-                                    };
-                                    return (
-                                        <Grid item xs={12} sm={6} lg={3} key={key}>
-                                            <ParticipantInput
-                                                label={PARTICIPANT_LABELS[key]}
-                                                value={formData.participants[key]}
-                                                onChange={(v) => handleParticipantChange(key, v)}
-                                                icon={<PeopleIcon color={colorMap[key]} sx={{ fontSize: 28 }} />}
-                                            />
-                                        </Grid>
-                                    );
-                                })}
-                            </Grid>
-                        </Box>
-
-                        {/* Submit Section */}
-                        <Paper 
-                            elevation={0} 
-                            sx={{ 
-                                p: { xs: 3, md: 4 }, 
-                                border: 1, 
-                                borderColor: 'divider',
-                                backgroundColor: 'grey.50'
-                            }}
-                        >
-                            <Stack 
-                                direction={{ xs: 'column', sm: 'row' }} 
-                                spacing={3} 
-                                alignItems="center"
-                                justifyContent="space-between"
-                            >
-                                <Box>
-                                    <Typography variant="h6" color="text.primary">
-                                        Totalt antal deltagare: 
-                                    </Typography>
-                                    <Typography variant="h4" color="primary" fontWeight={700}>
-                                        {getTotalParticipants()}
-                                    </Typography>
-                                </Box>
-                                
-                                <Button
-                                    type="submit"
-                                    variant="contained"
-                                    size="large"
-                                    disabled={submitting || !msalInstance}
-                                    endIcon={submitting ? <CircularProgress size={20} /> : <SendIcon />}
-                                    sx={{ 
-                                        minWidth: 200,
-                                        py: 2,
-                                        px: 4,
-                                        fontSize: '1.1rem',
-                                        fontWeight: 600
-                                    }}
-                                >
-                                    {submitting ? 'Registrerar...' : 'Registrera Närvaro'}
-                                </Button>
-                            </Stack>
-                        </Paper>
-                    </Stack>
-                </form>
-            </Box>
-        </Box>
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '60vh' }}>
+        <CircularProgress />
+      </Box>
     );
+  }
+
+  return (
+    <Box>
+      <Typography variant={isMobile ? 'h4' : 'h3'} align="center" sx={{ mb: 4, fontWeight: 700 }}>
+        Registrera utevistelse
+      </Typography>
+      <form onSubmit={handleSubmit}>
+        <Stack spacing={3}>
+          {(error || success) && (
+            <Alert severity={error ? 'error' : 'success'} onClose={() => { setError(null); setSuccess(null); }}>
+              {error || success}
+            </Alert>
+          )}
+
+          <Paper elevation={0} sx={{ p: { xs: 2, md: 3 }, border: 1, borderColor: 'divider' }}>
+            <Grid container spacing={3}>
+              <Grid item xs={12} md={4}>
+                <FormControl fullWidth required>
+                  <InputLabel>Äldreboende</InputLabel>
+                  <Select
+                    label="Äldreboende"
+                    value={formData.home_id}
+                    onChange={(e) => handleFieldChange('home_id', e.target.value)}
+                  >
+                    {homes.map((home) => (
+                      <MenuItem key={home.id} value={home.id}>
+                        {home.name}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12} md={4}>
+                <FormControl fullWidth required>
+                  <InputLabel>Avdelning</InputLabel>
+                  <Select
+                    label="Avdelning"
+                    value={formData.department_id}
+                    onChange={(e) => handleFieldChange('department_id', e.target.value)}
+                    disabled={!availableDepartments.length}
+                  >
+                    {availableDepartments.map((dept) => (
+                      <MenuItem key={dept.id} value={dept.id}>
+                        {dept.name}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12} md={4}>
+                <TextField
+                  fullWidth
+                  label="Datum"
+                  type="date"
+                  value={formData.date}
+                  onChange={(e) => handleFieldChange('date', e.target.value)}
+                  InputLabelProps={{ shrink: true }}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <CalendarIcon />
+                      </InputAdornment>
+                    ),
+                  }}
+                  required
+                />
+              </Grid>
+            </Grid>
+          </Paper>
+
+          <Paper elevation={0} sx={{ p: { xs: 2, md: 3 }, border: 1, borderColor: 'divider' }}>
+            <Stack spacing={2}>
+              <Typography variant="h6" sx={{ fontWeight: 600 }}>Typ av registrering</Typography>
+              <RadioGroup
+                row
+                value={formData.visit_type}
+                onChange={(e) => handleFieldChange('visit_type', e.target.value)}
+              >
+                <FormControlLabel value={VISIT_TYPES.GROUP} control={<Radio />} label="Grupp" />
+                <FormControlLabel value={VISIT_TYPES.INDIVIDUAL} control={<Radio />} label="Enskild" />
+              </RadioGroup>
+
+              {formData.visit_type === VISIT_TYPES.GROUP ? (
+                <Grid container spacing={3}>
+                  <Grid item xs={12} md={6}>
+                    <NumberInput
+                      label="Antal män"
+                      value={formData.gender_counts.men}
+                      onChange={(val) => handleGenderCountChange('men', val)}
+                      icon={<ManIcon />}
+                    />
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <NumberInput
+                      label="Antal kvinnor"
+                      value={formData.gender_counts.women}
+                      onChange={(val) => handleGenderCountChange('women', val)}
+                      icon={<WomanIcon />}
+                    />
+                  </Grid>
+                </Grid>
+              ) : (
+                <Box>
+                  <Typography variant="subtitle1" sx={{ mb: 1 }}>Välj kön</Typography>
+                  <RadioGroup
+                    row
+                    value={individualGender}
+                    onChange={(e) => setIndividualGender(e.target.value)}
+                  >
+                    {GENDER_OPTIONS.map((option) => (
+                      <FormControlLabel
+                        key={option.value}
+                        value={option.value}
+                        control={<Radio />}
+                        label={option.label}
+                      />
+                    ))}
+                  </RadioGroup>
+                </Box>
+              )}
+              <Chip icon={<GroupIcon />} label={`Totalt antal deltagare: ${totalParticipants}`} color="primary" variant="outlined" />
+            </Stack>
+          </Paper>
+
+          <Paper elevation={0} sx={{ p: { xs: 2, md: 3 }, border: 1, borderColor: 'divider' }}>
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>Svar på erbjudandet</Typography>
+            <RadioGroup
+              row
+              value={formData.offer_status}
+              onChange={(e) => handleOfferStatusChange(e.target.value)}
+            >
+              <FormControlLabel value={OFFER_STATUS.ACCEPTED} control={<Radio />} label="Tackade ja" />
+              <FormControlLabel value={OFFER_STATUS.DECLINED} control={<Radio />} label="Tackade nej" />
+            </RadioGroup>
+          </Paper>
+
+          {formData.offer_status === OFFER_STATUS.ACCEPTED && (
+            <Paper elevation={0} sx={{ p: { xs: 2, md: 3 }, border: 1, borderColor: 'divider' }}>
+              <Stack spacing={3}>
+                <Typography variant="h6" sx={{ fontWeight: 600 }}>Genomförd utevistelse</Typography>
+                <Autocomplete
+                  options={activityOptions}
+                  getOptionLabel={(option) => option?.name || ''}
+                  isOptionEqualToValue={(option, value) => option.id === value.id}
+                  value={activityOptions.find((option) => option.id === formData.activity_id) || null}
+                  onChange={(_, newValue) =>
+                    setFormData((prev) => ({
+                      ...prev,
+                      activity_id: newValue?.id || '',
+                      activity_name: newValue?.name || '',
+                    }))
+                  }
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      label="Aktivitet"
+                      required
+                      InputProps={{
+                        ...params.InputProps,
+                        startAdornment: (
+                          <>
+                            <InputAdornment position="start">
+                              <EventIcon color="primary" />
+                            </InputAdornment>
+                            {params.InputProps.startAdornment}
+                          </>
+                        ),
+                      }}
+                    />
+                  )}
+                />
+
+                <Autocomplete
+                  options={companionOptions}
+                  getOptionLabel={(option) => option?.name || ''}
+                  isOptionEqualToValue={(option, value) => option.id === value.id}
+                  value={companionOptions.find((option) => option.id === formData.companion_id) || null}
+                  onChange={(_, newValue) =>
+                    setFormData((prev) => ({
+                      ...prev,
+                      companion_id: newValue?.id || '',
+                      companion_name: newValue?.name || '',
+                    }))
+                  }
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      label="Med vem"
+                      required
+                      InputProps={{
+                        ...params.InputProps,
+                        startAdornment: (
+                          <>
+                            <InputAdornment position="start">
+                              <PersonIcon color="primary" />
+                            </InputAdornment>
+                            {params.InputProps.startAdornment}
+                          </>
+                        ),
+                      }}
+                    />
+                  )}
+                />
+
+                <TextField
+                  type="number"
+                  label="Varaktighet (minuter)"
+                  value={formData.duration_minutes ?? ''}
+                  required
+                  onChange={(e) => {
+                    const parsed = parseInt(e.target.value || '1', 10);
+                    const safeValue = Number.isNaN(parsed) ? 1 : Math.max(1, parsed);
+                    handleFieldChange('duration_minutes', safeValue);
+                  }}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <AccessTimeIcon />
+                      </InputAdornment>
+                    ),
+                    inputProps: { min: 1, max: 720 },
+                  }}
+                />
+
+                <Divider />
+                <Stack spacing={2}>
+                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
+                    <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Nöjdhet (valfritt)</Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Lägg till en rad per deltagare som lämnat en bedömning.
+                    </Typography>
+                  </Stack>
+                  {formData.satisfaction_entries.length === 0 && (
+                    <Typography variant="body2" color="text.secondary">
+                      Ingen nöjdhet registrerad än.
+                    </Typography>
+                  )}
+                  <Stack spacing={2}>
+                    {formData.satisfaction_entries.map((entry, index) => (
+                      <SatisfactionEntry
+                        key={`${entry.gender}-${index}`}
+                        entry={entry}
+                        onChange={(updated) => {
+                          setFormData((prev) => ({
+                            ...prev,
+                            satisfaction_entries: prev.satisfaction_entries.map((item, i) => (i === index ? updated : item)),
+                          }));
+                        }}
+                        onRemove={() => {
+                          setFormData((prev) => ({
+                            ...prev,
+                            satisfaction_entries: prev.satisfaction_entries.filter((_, i) => i !== index),
+                          }));
+                        }}
+                        disableRemove={formData.satisfaction_entries.length === 0}
+                      />
+                    ))}
+                  </Stack>
+                  <Button disabled={!canAddSatisfaction} onClick={() => {
+                    if (!canAddSatisfaction) return;
+                    setFormData((prev) => ({
+                      ...prev,
+                      satisfaction_entries: [
+                        ...prev.satisfaction_entries,
+                        { gender: 'men', rating: SATISFACTION_MAX },
+                      ],
+                    }));
+                  }}>
+                    Lägg till nöjdhet
+                  </Button>
+                </Stack>
+              </Stack>
+            </Paper>
+          )}
+
+          <Card elevation={0} sx={{ border: 1, borderColor: 'divider' }}>
+            <CardContent>
+              <Stack
+                direction={{ xs: 'column', md: 'row' }}
+                spacing={3}
+                alignItems={{ md: 'center' }}
+                justifyContent="space-between"
+              >
+                <Box>
+                  <Typography variant="subtitle1" color="text.secondary">
+                    Sammanfattning
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700 }}>
+                    {totalParticipants} deltagare
+                  </Typography>
+                </Box>
+                <Button
+                  type="submit"
+                  variant="contained"
+                  size="large"
+                  disabled={submitting}
+                >
+                  {submitting ? 'Registrerar...' : 'Registrera'}
+                </Button>
+              </Stack>
+            </CardContent>
+          </Card>
+        </Stack>
+      </form>
+    </Box>
+  );
 };
 
 export default ResponsiveRegistration;

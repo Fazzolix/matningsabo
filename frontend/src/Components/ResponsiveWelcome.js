@@ -68,7 +68,7 @@ const ResponsiveWelcome = () => {
                                         gutterBottom
                                         sx={{ fontWeight: 600, mb: 3 }}
                                     >
-                                        Träffpunktsstatistik
+                                        SÄBO – Utevistelser
                                     </Typography>
                                     <Stack spacing={2} alignItems="center">
                                         <CircularProgress size={40} />
@@ -125,7 +125,7 @@ const ResponsiveWelcome = () => {
                                             fontSize: { xs: '1.75rem', sm: '2.125rem', md: '2.5rem' }
                                         }}
                                     >
-                                        Träffpunktsstatistik
+                                        SÄBO – Utevistelser
                                     </Typography>
                                     
                                     <Typography 
@@ -137,7 +137,7 @@ const ResponsiveWelcome = () => {
                                             lineHeight: 1.6
                                         }}
                                     >
-                                        Logga in med ditt Skövde kommun-konto för att registrera och visa statistik.
+                                        Logga in med ditt Skövde kommun-konto för att registrera och analysera utevistelser.
                                     </Typography>
                                     
                                     <Button
@@ -193,7 +193,7 @@ const ResponsiveWelcome = () => {
                                     variant="caption" 
                                     color="text.secondary"
                                 >
-                                    Skövde kommun - Träffpunktsstatistik
+                                    Skövde kommun - SÄBO – Utevistelser
                                 </Typography>
                             </Box>
                         </Container>

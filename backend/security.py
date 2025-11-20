@@ -9,6 +9,14 @@ from flask import request, jsonify, make_response
 from threading import Lock
 from datetime import datetime
 
+ALLOWED_GENDERS = {'men', 'women'}
+ALLOWED_VISIT_TYPES = {'group', 'individual'}
+ALLOWED_OFFER_STATUS = {'accepted', 'declined'}
+MAX_DURATION_MINUTES = 720
+MIN_DURATION_MINUTES = 1
+MAX_PARTICIPANTS_PER_ENTRY = 1000
+MAX_DEPARTMENTS_PER_HOME = 20
+
 # ========== RATE LIMITING ==========
 
 class SimpleRateLimiter:
@@ -126,15 +134,12 @@ def init_security_headers(app):
 
 # ========== INPUT VALIDERING ==========
 
-def validate_traffpunkt_id(traffpunkt_id):
-    """Validera träffpunkt ID"""
-    if not traffpunkt_id or not isinstance(traffpunkt_id, str):
-        return False, "Träffpunkt ID saknas"
-    
-    # Endast alfanumeriska tecken och bindestreck, max 50 tecken
-    if not re.match(r'^[a-z0-9-]{1,50}$', traffpunkt_id):
-        return False, "Ogiltigt träffpunkt ID format"
-    
+def validate_home_id(home_id):
+    """Validera äldreboende-ID."""
+    if not home_id or not isinstance(home_id, str):
+        return False, "Äldreboende-ID saknas"
+    if not re.match(r'^[a-z0-9-]{1,50}$', home_id):
+        return False, "Ogiltigt format för äldreboende-ID"
     return True, None
 
 def validate_date(date_str):
@@ -148,89 +153,140 @@ def validate_date(date_str):
     except ValueError:
         return False, "Ogiltigt datumformat (använd YYYY-MM-DD)"
 
-def validate_time_block(time_block):
-    """Validera tidsblock"""
-    valid_blocks = ['fm', 'em', 'kv']  # fm=förmiddag, em=eftermiddag, kv=kväll
-    if time_block not in valid_blocks:
-        return False, f"Ogiltigt tidsblock. Måste vara en av: {', '.join(valid_blocks)}"
+def validate_visit_type(visit_type):
+    if visit_type not in ALLOWED_VISIT_TYPES:
+        return False, f"Ogiltig typ. Måste vara en av: {', '.join(sorted(ALLOWED_VISIT_TYPES))}"
     return True, None
 
-def validate_activity(activity):
-    """Validera aktivitet"""
-    if not activity or not isinstance(activity, str):
-        return False, "Aktivitet saknas"
-    
-    # Max 100 tecken, inga farliga tecken
-    if len(activity) > 100:
-        return False, "Aktivitetsnamn för långt (max 100 tecken)"
-    
-    if not re.match(r'^[a-zA-ZåäöÅÄÖ0-9\s\-\_]+$', activity):
-        return False, "Ogiltiga tecken i aktivitetsnamn"
-    
+
+def validate_offer_status(status):
+    if status not in ALLOWED_OFFER_STATUS:
+        return False, f"Ogiltigt svar. Måste vara en av: {', '.join(sorted(ALLOWED_OFFER_STATUS))}"
     return True, None
 
-def validate_participants(participants):
-    """Validera deltagardata"""
-    if not isinstance(participants, dict):
-        return False, "Deltagardata måste vara ett objekt"
 
-    # Tillåtna och obligatoriska kategorier
-    allowed_categories = ['boende', 'externa', 'nya', 'trygghetsboende']
-    required_categories = ['boende', 'externa', 'nya']  # trygghetsboende är ny och valfri
-
-    # Okända kategorier ska inte accepteras (förebygger stavfel i payload)
-    for category in participants.keys():
-        if category not in allowed_categories:
-            return False, f"Okänd kategori '{category}'"
-
-    # Kontrollera obligatoriska kategorier och att de är objekt
-    for category in required_categories:
-        if category not in participants:
-            return False, f"Kategori '{category}' saknas"
-        if not isinstance(participants[category], dict):
-            return False, f"Kategori '{category}' måste vara ett objekt"
-
-    # Validera numeriska värden för de kategorier som finns med
-    for category, values in participants.items():
-        if not isinstance(values, dict):
-            return False, f"Kategori '{category}' måste vara ett objekt"
-        for gender in ['men', 'women']:
-            if gender in values:
-                value = values[gender]
-                if not isinstance(value, int) or value < 0 or value > 1000:
-                    return False, f"Ogiltigt antal för {category}.{gender} (måste vara 0-1000)"
-
+def validate_name(value, field='fältet', max_length=100):
+    if not value or not isinstance(value, str):
+        return False, f"{field} saknas"
+    value = value.strip()
+    if not value:
+        return False, f"{field} får inte vara tomt"
+    if len(value) > max_length:
+        return False, f"{field} får högst innehålla {max_length} tecken"
+    if not re.match(r'^[a-zA-ZåäöÅÄÖ0-9\s\-\_]+$', value):
+        return False, f"{field} innehåller ogiltiga tecken"
     return True, None
 
-def validate_attendance_data(data):
-    """Validera all närvarodata"""
+
+def validate_gender_counts(gender_counts, visit_type, offer_status=None):
+    if not isinstance(gender_counts, dict):
+        return False, "Deltagarantal måste vara ett objekt"
+    total = 0
+    for gender in ALLOWED_GENDERS:
+        value = gender_counts.get(gender, 0)
+        if not isinstance(value, int) or value < 0 or value > MAX_PARTICIPANTS_PER_ENTRY:
+            return False, f"Ogiltigt värde för {gender} (0-{MAX_PARTICIPANTS_PER_ENTRY})"
+        total += value
+    # Tillåt 0 deltagare om besöket avböjdes
+    if offer_status != 'declined' and total <= 0:
+        return False, "Minst en deltagare måste anges"
+    if visit_type == 'individual' and offer_status != 'declined' and total != 1:
+        return False, "Enskild registrering måste avse exakt en person"
+    return True, None
+
+
+def validate_duration_minutes(value):
+    if value is None:
+        return False, "Varaktighet i minuter krävs"
+    if not isinstance(value, int):
+        return False, "Varaktighet måste anges i heltal"
+    if value < MIN_DURATION_MINUTES or value > MAX_DURATION_MINUTES:
+        return False, f"Varaktighet måste vara mellan {MIN_DURATION_MINUTES}-{MAX_DURATION_MINUTES} minuter"
+    return True, None
+
+
+def validate_satisfaction_entries(entries, total_participants):
+    if entries is None:
+        return True, None
+    if not isinstance(entries, list):
+        return False, "Nöjdhet måste vara en lista"
+    if len(entries) > total_participants:
+        return False, "Antalet nöjdhetsnoteringar får inte överstiga antalet deltagare"
+    for entry in entries:
+        if not isinstance(entry, dict):
+            return False, "Nöjdhetsposter måste vara objekt"
+        gender = entry.get('gender')
+        rating = entry.get('rating')
+        if gender not in ALLOWED_GENDERS:
+            return False, "Nöjdhet måste kopplas till man eller kvinna"
+        if not isinstance(rating, int) or rating < 1 or rating > 6:
+            return False, "Nöjdhet måste vara ett heltal mellan 1-6"
+    return True, None
+
+
+def validate_department(home_doc, department_id, existing_department_id=None):
+    if not department_id or not isinstance(department_id, str):
+        if existing_department_id and department_id == existing_department_id:
+            # Allow legacy department to pass through even if missing now
+            return True, None
+        return False, "Avdelning måste anges"
+    departments = (home_doc or {}).get('departments') or []
+    for dept in departments:
+        if dept.get('id') == department_id:
+            if dept.get('active', True):
+                return True, None
+            break
+    if existing_department_id and department_id == existing_department_id:
+        # Allow edits to legacy/removed departments
+        return True, None
+    return False, "Ogiltig avdelning"
+
+def validate_attendance_data(data, home_doc=None, existing_department_id=None):
+    """Validera utevistelse-data."""
     errors = []
-    
-    # Validera träffpunkt
-    valid, error = validate_traffpunkt_id(data.get('traffpunkt_id'))
+
+    valid, error = validate_home_id(data.get('home_id'))
     if not valid:
         errors.append(error)
-    
-    # Validera datum
+
+    valid, error = validate_department(home_doc, data.get('department_id'), existing_department_id=existing_department_id)
+    if not valid:
+        errors.append(error)
+
     valid, error = validate_date(data.get('date'))
     if not valid:
         errors.append(error)
-    
-    # Validera tidsblock
-    valid, error = validate_time_block(data.get('time_block'))
+
+    valid, error = validate_visit_type(data.get('visit_type'))
     if not valid:
         errors.append(error)
-    
-    # Validera aktivitet
-    valid, error = validate_activity(data.get('activity'))
+
+    valid, error = validate_offer_status(data.get('offer_status'))
     if not valid:
         errors.append(error)
-    
-    # Validera deltagare
-    valid, error = validate_participants(data.get('participants', {}))
+
+    valid, error = validate_gender_counts(data.get('gender_counts', {}), data.get('visit_type'), data.get('offer_status'))
     if not valid:
         errors.append(error)
-    
+    total = 0
+    if valid:
+        total = sum(int(data.get('gender_counts', {}).get(g, 0)) for g in ALLOWED_GENDERS)
+
+    if data.get('offer_status') == 'accepted':
+        valid, error = validate_name(data.get('activity_name'), field='Aktivitet')
+        if not valid:
+            errors.append(error)
+        valid, error = validate_name(data.get('companion_name'), field='Med vem')
+        if not valid:
+            errors.append(error)
+        valid, error = validate_duration_minutes(data.get('duration_minutes'))
+        if not valid:
+            errors.append(error)
+
+    valid, error = validate_satisfaction_entries(data.get('satisfaction_entries'), total)
+    if not valid:
+        errors.append(error)
+
     return len(errors) == 0, errors
 
 def sanitize_string(value, max_length=100):
@@ -244,8 +300,8 @@ def sanitize_string(value, max_length=100):
     # Begränsa längd
     return value[:max_length].strip()
 
-def validate_traffpunkt_name(name):
-    """Validera träffpunktnamn"""
+def validate_home_name(name):
+    """Validera namn för äldreboende"""
     if not name or not isinstance(name, str):
         return False, "Namn saknas"
     
@@ -259,5 +315,5 @@ def validate_traffpunkt_name(name):
     # Tillåt svenska bokstäver och grundläggande tecken
     if not re.match(r'^[a-zA-ZåäöÅÄÖ0-9\s\-\_]+$', name):
         return False, "Namnet innehåller ogiltiga tecken"
-    
+
     return True, None

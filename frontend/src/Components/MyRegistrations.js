@@ -1,14 +1,23 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { listMyAttendance, getAttendance, updateAttendance, deleteAttendance } from '../services/myAttendanceService';
-import { getTraffpunkter, getActivities } from '../services/statisticsService';
+import { listMyVisits, getVisit, updateVisit, deleteVisit } from '../services/myAttendanceService';
+import { getHomes, getActivities, getCompanions } from '../services/statisticsService';
 import { toISODateString } from '../utils/dateHelpers';
-import { PARTICIPANT_KEYS, PARTICIPANT_LABELS, ensureParticipantsShape } from '../config/participants';
+import {
+  ensureGenderCounts,
+  makeEmptyGenderCounts,
+  GENDER_OPTIONS,
+  OFFER_STATUS,
+  VISIT_TYPES,
+  SATISFACTION_MAX,
+  SATISFACTION_MIN,
+} from '../config/participants';
 import {
   Box, Card, CardContent, Typography, Button, IconButton, Stack, Alert,
   CircularProgress, List, ListItem, ListItemText, Divider, Dialog, DialogTitle,
   DialogContent, DialogActions, TextField, FormControl, InputLabel, Select,
-  MenuItem, RadioGroup, FormControlLabel, Radio, InputAdornment
+  MenuItem, RadioGroup, FormControlLabel, Radio, InputAdornment, Autocomplete,
+  Rating
 } from '@mui/material';
 import {
   NavigateBefore as PrevIcon,
@@ -47,8 +56,10 @@ const MyRegistrations = () => {
   const [editing, setEditing] = useState(null); // full doc
   const [saving, setSaving] = useState(false);
 
-  const [traffpunkter, setTraffpunkter] = useState([]);
+  const [homes, setHomes] = useState([]);
   const [activities, setActivities] = useState([]);
+  const [companions, setCompanions] = useState([]);
+  const [individualGender, setIndividualGender] = useState('men');
 
   const weekRange = useMemo(() => {
     const today = new Date();
@@ -58,15 +69,31 @@ const MyRegistrations = () => {
     return { from: start, to: end, base };
   }, [weekOffset]);
 
+  const editingHome = useMemo(() => {
+    if (!editing) return null;
+    return homes.find((t) => t.id === editing.home_id) || null;
+  }, [editing, homes]);
+
+  const editingDepartments = useMemo(() => {
+    if (!editingHome) return [];
+    return editingHome.departments || [];
+  }, [editingHome]);
+
+  const editingTotalParticipants = editing ? (ensureGenderCounts(editing.gender_counts).men + ensureGenderCounts(editing.gender_counts).women) : 0;
+
+  const canAddEditingSatisfaction = editing && editing.offer_status === OFFER_STATUS.ACCEPTED && editing.satisfaction_entries.length < editingTotalParticipants;
+
   const fetchLists = async () => {
     if (!msalInstance || !user) return;
     try {
-      const [tRes, aRes] = await Promise.all([
-        getTraffpunkter(msalInstance, user.account),
-        getActivities(msalInstance, user.account)
-      ]);
-      setTraffpunkter(tRes.data || []);
-      setActivities(aRes.data || []);
+    const [tRes, aRes, cRes] = await Promise.all([
+      getHomes(msalInstance, user.account),
+      getActivities(msalInstance, user.account),
+      getCompanions(msalInstance, user.account),
+    ]);
+    setHomes(tRes.data || []);
+    setActivities(aRes.data || []);
+    setCompanions(cRes.data || []);
     } catch (e) {
       // Non-blocking; editor can still show current values
       console.warn('Failed loading lists', e);
@@ -78,7 +105,7 @@ const MyRegistrations = () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await listMyAttendance(msalInstance, user.account, { from: weekRange.from, to: weekRange.to });
+      const res = await listMyVisits(msalInstance, user.account, { from: weekRange.from, to: weekRange.to });
       setItems(res.data || []);
     } catch (e) {
       setError('Kunde inte hämta registreringar');
@@ -101,10 +128,42 @@ const MyRegistrations = () => {
     if (!msalInstance || !user) return;
     setError(null);
     try {
-      const res = await getAttendance(msalInstance, user.account, id);
+      const res = await getVisit(msalInstance, user.account, id);
       const doc = res.data || {};
-      const participants = ensureParticipantsShape(doc.participants);
-      setEditing({ ...doc, participants });
+      const genderCounts = doc.gender_counts
+        ? ensureGenderCounts(doc.gender_counts)
+        : (() => {
+            let men = 0;
+            let women = 0;
+            Object.values(doc.participants || {}).forEach((entry) => {
+              if (!entry) return;
+              men += Number(entry.men) || 0;
+              women += Number(entry.women) || 0;
+            });
+            return ensureGenderCounts({ men, women });
+          })();
+      const satisfactionEntries = (doc.satisfaction_entries || []).map((entry) => ({
+        gender: entry.gender,
+        rating: entry.rating,
+      }));
+      if (doc.visit_type === VISIT_TYPES.INDIVIDUAL) {
+        if (genderCounts.women === 1) {
+          setIndividualGender('women');
+        } else {
+          setIndividualGender('men');
+        }
+      }
+      setEditing({
+        ...doc,
+        gender_counts: genderCounts,
+        satisfaction_entries: satisfactionEntries,
+        activity_id: doc.activity_id || '',
+        activity_name: doc.activity || doc.activity_name || '',
+        companion_id: doc.companion_id || '',
+        companion_name: doc.companion || doc.companion_name || '',
+        offer_status: doc.offer_status || OFFER_STATUS.ACCEPTED,
+        visit_type: doc.visit_type || VISIT_TYPES.GROUP,
+      });
       setEditorOpen(true);
     } catch (e) {
       setError('Kunde inte öppna registreringen');
@@ -116,7 +175,21 @@ const MyRegistrations = () => {
     setSaving(true);
     setError(null);
     try {
-      await updateAttendance(msalInstance, user.account, editing.id, editing);
+      const parsedDuration = Number(editing.duration_minutes || 0);
+      const safeDuration = Number.isFinite(parsedDuration) && parsedDuration > 0 ? Math.round(parsedDuration) : null;
+      const payload = {
+        ...editing,
+        gender_counts: ensureGenderCounts(editing.gender_counts),
+        satisfaction_entries:
+          editing.offer_status === OFFER_STATUS.ACCEPTED
+            ? editing.satisfaction_entries.map((entry) => ({ gender: entry.gender, rating: entry.rating }))
+            : [],
+        duration_minutes:
+          editing.offer_status === OFFER_STATUS.ACCEPTED
+            ? safeDuration
+            : null,
+      };
+      await updateVisit(msalInstance, user.account, editing.id, payload);
       setEditorOpen(false);
       setEditing(null);
       await fetchWeek();
@@ -133,7 +206,7 @@ const MyRegistrations = () => {
     setSaving(true);
     setError(null);
     try {
-      await deleteAttendance(msalInstance, user.account, editing.id);
+      await deleteVisit(msalInstance, user.account, editing.id);
       setEditorOpen(false);
       setEditing(null);
       await fetchWeek();
@@ -144,12 +217,107 @@ const MyRegistrations = () => {
     }
   };
 
-  const getTraffName = (id) => (traffpunkter.find(t => t.id === id)?.name || id);
+  const handleEditingFieldChange = (field, value) => {
+    setEditing((prev) => {
+      if (!prev) return prev;
+      if (field === 'offer_status' && value === OFFER_STATUS.DECLINED) {
+        return {
+          ...prev,
+          offer_status: value,
+          activity_id: '',
+          activity_name: '',
+          companion_id: '',
+          companion_name: '',
+          duration_minutes: null,
+          satisfaction_entries: [],
+        };
+      }
+      return { ...prev, [field]: value };
+    });
+  };
+
+  const handleEditingGenderChange = (gender, value) => {
+    const numericValue = Number.isNaN(value) ? 0 : value;
+    setEditing((prev) => {
+      if (!prev) return prev;
+      const counts = ensureGenderCounts(prev.gender_counts);
+      return {
+        ...prev,
+        gender_counts: { ...counts, [gender]: Math.max(0, numericValue) },
+      };
+    });
+  };
+
+  const handleVisitTypeChange = (value) => {
+    setEditing((prev) => {
+      if (!prev) return prev;
+      if (value === VISIT_TYPES.INDIVIDUAL) {
+        const genderCounts = individualGender === 'women' ? { men: 0, women: 1 } : { men: 1, women: 0 };
+        return { ...prev, visit_type: value, gender_counts: genderCounts };
+      }
+      return { ...prev, visit_type: value };
+    });
+  };
+
+  const handleIndividualGenderSelect = (gender) => {
+    setIndividualGender(gender);
+    setEditing((prev) => {
+      if (!prev || prev.visit_type !== VISIT_TYPES.INDIVIDUAL) return prev;
+      return {
+        ...prev,
+        gender_counts: gender === 'women' ? { men: 0, women: 1 } : { men: 1, women: 0 },
+      };
+    });
+  };
+
+  const handleAddEditingSatisfaction = () => {
+    if (!canAddEditingSatisfaction) return;
+    setEditing((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        satisfaction_entries: [
+          ...(prev.satisfaction_entries || []),
+          { gender: 'men', rating: SATISFACTION_MAX },
+        ],
+      };
+    });
+  };
+
+  const handleUpdateSatisfaction = (index, entry) => {
+    setEditing((prev) => {
+      if (!prev) return prev;
+      const entries = prev.satisfaction_entries || [];
+      return {
+        ...prev,
+        satisfaction_entries: entries.map((item, i) => (i === index ? entry : item)),
+      };
+    });
+  };
+
+  const handleRemoveSatisfaction = (index) => {
+    setEditing((prev) => {
+      if (!prev) return prev;
+      const entries = prev.satisfaction_entries || [];
+      return {
+        ...prev,
+        satisfaction_entries: entries.filter((_, i) => i !== index),
+      };
+    });
+  };
+
+  const getHomeName = (id) => (homes.find(t => t.id === id)?.name || id);
+  const getDepartmentName = (homeId, departmentId) => {
+    const home = homes.find(t => t.id === homeId);
+    if (!home) return departmentId || '-';
+    const dept = (home.departments || []).find((d) => d.id === departmentId);
+    return dept?.name || departmentId || '-';
+  };
 
   return (
     <Box sx={{ maxWidth: { xs: '100%', md: 900 }, mx: 'auto' }}>
       <Typography variant="h4" component="h1" gutterBottom sx={{ mb: 3, fontWeight: 600, textAlign: 'center' }}>
-        Mina registreringar
+        Mina utevistelser
       </Typography>
 
       <Card>
@@ -183,8 +351,8 @@ const MyRegistrations = () => {
                       <ListItem disablePadding>
                         <ListItem button onClick={() => openEditor(it.id)}>
                           <ListItemText
-                            primary={`${it.date} • ${it.time_block?.toUpperCase()} • ${it.activity}`}
-                            secondary={`Träffpunkt: ${getTraffName(it.traffpunkt_id)} • Totalt: ${it.total_participants ?? 0}`}
+                            primary={`${it.date} • ${it.activity || (it.offer_status === OFFER_STATUS.ACCEPTED ? 'Ingen aktivitet' : 'Ej genomförd')}`}
+                            secondary={`Äldreboende: ${getHomeName(it.home_id)} • Avdelning: ${getDepartmentName(it.home_id, it.department_id)} • ${it.total_participants ?? 0} deltagare • ${(it.offer_status || OFFER_STATUS.ACCEPTED) === OFFER_STATUS.ACCEPTED ? 'Tackade ja' : 'Tackade nej'}`}
                           />
                         </ListItem>
                       </ListItem>
@@ -202,17 +370,24 @@ const MyRegistrations = () => {
         <DialogTitle>Redigera registrering</DialogTitle>
         <DialogContent dividers>
           {editing ? (
-            <Stack spacing={2}>
+            <Stack spacing={3}>
+              <TextField
+                label="Äldreboende"
+                value={getHomeName(editing.home_id)}
+                InputProps={{ readOnly: true, startAdornment: (<InputAdornment position="start"><LocationIcon /></InputAdornment>) }}
+                fullWidth
+              />
+
               <FormControl fullWidth>
-                <InputLabel id="traff-label">Träffpunkt</InputLabel>
+                <InputLabel>Avdelning</InputLabel>
                 <Select
-                  labelId="traff-label"
-                  label="Träffpunkt"
-                  value={editing.traffpunkt_id}
-                  onChange={(e) => setEditing({ ...editing, traffpunkt_id: e.target.value })}
-                  startAdornment={<InputAdornment position="start"><LocationIcon /></InputAdornment>}
+                  label="Avdelning"
+                  value={editing.department_id || ''}
+                  onChange={(e) => handleEditingFieldChange('department_id', e.target.value)}
                 >
-                  {traffpunkter.map(t => <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>)}
+                  {editingDepartments.map((dept) => (
+                    <MenuItem key={dept.id} value={dept.id}>{dept.name}</MenuItem>
+                  ))}
                 </Select>
               </FormControl>
 
@@ -220,45 +395,134 @@ const MyRegistrations = () => {
                 type="date"
                 label="Datum"
                 value={editing.date}
-                onChange={(e) => setEditing({ ...editing, date: e.target.value })}
+                onChange={(e) => handleEditingFieldChange('date', e.target.value)}
                 InputLabelProps={{ shrink: true }}
                 InputProps={{ startAdornment: (<InputAdornment position="start"><CalendarIcon /></InputAdornment>) }}
                 fullWidth
               />
 
               <FormControl>
-                <RadioGroup row value={editing.time_block} onChange={(e) => setEditing({ ...editing, time_block: e.target.value })}>
-                  <FormControlLabel value="fm" control={<Radio />} label="Förmiddag" />
-                  <FormControlLabel value="em" control={<Radio />} label="Eftermiddag" />
-                  <FormControlLabel value="kv" control={<Radio />} label="Kväll" />
+                <RadioGroup row value={editing.visit_type} onChange={(e) => handleVisitTypeChange(e.target.value)}>
+                  <FormControlLabel value={VISIT_TYPES.GROUP} control={<Radio />} label="Grupp" />
+                  <FormControlLabel value={VISIT_TYPES.INDIVIDUAL} control={<Radio />} label="Enskild" />
                 </RadioGroup>
               </FormControl>
 
-              <FormControl fullWidth>
-                <InputLabel id="activity-label">Aktivitet</InputLabel>
-                <Select
-                  labelId="activity-label"
-                  label="Aktivitet"
-                  value={editing.activity}
-                  onChange={(e) => setEditing({ ...editing, activity: e.target.value })}
-                  startAdornment={<InputAdornment position="start"><EventIcon /></InputAdornment>}
-                >
-                  {activities.map(a => <MenuItem key={a.id} value={a.name}>{a.name}</MenuItem>)}
-                </Select>
+              {editing.visit_type === VISIT_TYPES.GROUP ? (
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                  <TextField
+                    label="Antal män"
+                    type="number"
+                    value={ensureGenderCounts(editing.gender_counts).men}
+                    onChange={(e) => handleEditingGenderChange('men', parseInt(e.target.value || '0', 10))}
+                    inputProps={{ min: 0 }}
+                    fullWidth
+                  />
+                  <TextField
+                    label="Antal kvinnor"
+                    type="number"
+                    value={ensureGenderCounts(editing.gender_counts).women}
+                    onChange={(e) => handleEditingGenderChange('women', parseInt(e.target.value || '0', 10))}
+                    inputProps={{ min: 0 }}
+                    fullWidth
+                  />
+                </Stack>
+              ) : (
+                <RadioGroup row value={individualGender} onChange={(e) => handleIndividualGenderSelect(e.target.value)}>
+                  {GENDER_OPTIONS.map((option) => (
+                    <FormControlLabel key={option.value} value={option.value} control={<Radio />} label={option.label} />
+                  ))}
+                </RadioGroup>
+              )}
+
+              <FormControl>
+                <RadioGroup row value={editing.offer_status} onChange={(e) => handleEditingFieldChange('offer_status', e.target.value)}>
+                  <FormControlLabel value={OFFER_STATUS.ACCEPTED} control={<Radio />} label="Tackade ja" />
+                  <FormControlLabel value={OFFER_STATUS.DECLINED} control={<Radio />} label="Tackade nej" />
+                </RadioGroup>
               </FormControl>
 
-              {/* Participants simple editor */}
-              {PARTICIPANT_KEYS.map(cat => (
-                <Box key={cat} sx={{ border: 1, borderColor: 'divider', borderRadius: 2, p: 2 }}>
-                  <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>{PARTICIPANT_LABELS[cat]}</Typography>
-                  <Stack direction="row" spacing={2}>
-                    <TextField type="number" label="Män" inputProps={{ min:0 }} value={editing.participants?.[cat]?.men ?? 0}
-                      onChange={(e) => setEditing({ ...editing, participants: { ...editing.participants, [cat]: { ...editing.participants?.[cat], men: Math.max(0, parseInt(e.target.value||'0',10)) } } })} />
-                    <TextField type="number" label="Kvinnor" inputProps={{ min:0 }} value={editing.participants?.[cat]?.women ?? 0}
-                      onChange={(e) => setEditing({ ...editing, participants: { ...editing.participants, [cat]: { ...editing.participants?.[cat], women: Math.max(0, parseInt(e.target.value||'0',10)) } } })} />
+              {editing.offer_status === OFFER_STATUS.ACCEPTED && (
+                <Stack spacing={2}>
+                  <Autocomplete
+                    options={activities}
+                    getOptionLabel={(option) => option?.name || ''}
+                    value={activities.find((a) => a.id === editing.activity_id) || null}
+                    onChange={(_, newValue) => {
+                      setEditing((prev) => {
+                        if (!prev) return prev;
+                        return {
+                          ...prev,
+                          activity_id: newValue?.id || '',
+                          activity_name: newValue?.name || '',
+                        };
+                      });
+                    }}
+                    renderInput={(params) => <TextField {...params} label="Aktivitet" required />}
+                  />
+
+                  <Autocomplete
+                    options={companions}
+                    getOptionLabel={(option) => option?.name || ''}
+                    value={companions.find((c) => c.id === editing.companion_id) || null}
+                    onChange={(_, newValue) => {
+                      setEditing((prev) => {
+                        if (!prev) return prev;
+                        return {
+                          ...prev,
+                          companion_id: newValue?.id || '',
+                          companion_name: newValue?.name || '',
+                        };
+                      });
+                    }}
+                    renderInput={(params) => <TextField {...params} label="Med vem" required />}
+                  />
+
+                  <TextField
+                    label="Varaktighet (minuter)"
+                    type="number"
+                    value={editing.duration_minutes ?? ''}
+                    onChange={(e) => {
+                      const parsed = parseInt(e.target.value || '1', 10);
+                      const safeValue = Number.isNaN(parsed) ? 1 : Math.max(1, parsed);
+                      handleEditingFieldChange('duration_minutes', safeValue);
+                    }}
+                    inputProps={{ min: 1, max: 720 }}
+                  />
+
+                  <Divider />
+                  <Stack spacing={1}>
+                    <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Nöjdhet</Typography>
+                    {(editing.satisfaction_entries || []).map((entry, index) => (
+                      <Stack key={`${entry.gender}-${index}`} direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'center' }}>
+                        <FormControl fullWidth>
+                          <InputLabel>Kön</InputLabel>
+                          <Select
+                            label="Kön"
+                            value={entry.gender}
+                            onChange={(e) => handleUpdateSatisfaction(index, { ...entry, gender: e.target.value })}
+                          >
+                            {GENDER_OPTIONS.map((option) => (
+                              <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                        <Rating
+                          value={entry.rating}
+                          max={SATISFACTION_MAX}
+                          onChange={(_, newValue) => handleUpdateSatisfaction(index, { ...entry, rating: newValue || SATISFACTION_MIN })}
+                        />
+                        <IconButton color="error" onClick={() => handleRemoveSatisfaction(index)}>
+                          <DeleteIcon />
+                        </IconButton>
+                      </Stack>
+                    ))}
+                    <Button onClick={handleAddEditingSatisfaction} disabled={!canAddEditingSatisfaction}>
+                      Lägg till nöjdhet
+                    </Button>
                   </Stack>
-                </Box>
-              ))}
+                </Stack>
+              )}
             </Stack>
           ) : (
             <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}><CircularProgress /></Box>

@@ -18,7 +18,7 @@ az account set --subscription <SUBSCRIPTION_ID>
 
 2) Hämta ACR login server och logga in
 ```bash
-# Ersätt <ACR_NAME> med ditt ACR (t.ex. traffpunktacr)
+# Ersätt <ACR_NAME> med ditt ACR (t.ex. saboacr)
 ACR_SERVER=$(az acr show -n <ACR_NAME> --query loginServer -o tsv)
 az acr login -n <ACR_NAME>
 ```
@@ -26,11 +26,11 @@ az acr login -n <ACR_NAME>
 3) Bygg och pusha
 ```bash
 # I repo‑roten
-docker build -t traffpunkt-statistik:latest .
+docker build -t sabo-utevistelser:latest .
 
-docker tag traffpunkt-statistik:latest $ACR_SERVER/traffpunkt-statistik:latest
+docker tag sabo-utevistelser:latest $ACR_SERVER/sabo-utevistelser:latest
 
-docker push $ACR_SERVER/traffpunkt-statistik:latest
+docker push $ACR_SERVER/sabo-utevistelser:latest
 ```
 
 Tips: Om du använder Docker Hub — tagga till `docker.io/<user>/traffpunkt-statistik:latest` och `docker push` där.
@@ -49,7 +49,7 @@ Tips: Om du använder Docker Hub — tagga till `docker.io/<user>/traffpunkt-sta
 ## 3) Skapa Container App (Portal UI)
 - Create → Container Apps
 - Miljö: skapa ny (eller välj befintlig)
-- Container image: välj din image från ACR (ex: `$ACR_SERVER/traffpunkt-statistik:latest`)
+- Container image: välj din image från ACR (ex: `$ACR_SERVER/sabo-utevistelser:latest`)
 - Ingress: ON (external)
 - Target Port: `8080`
 
@@ -59,13 +59,14 @@ Tips: Om du använder Docker Hub — tagga till `docker.io/<user>/traffpunkt-sta
 - `AZURE_TENANT_ID` = din Tenant ID
 - `FRONTEND_URL` = `https://<din-containerapp-domän>` (eller extern frontend‑domän)
 - `SUPERADMIN_EMAIL` = din admin‑e‑post
-- `COSMOS_DATABASE` = `traffpunkt`
-- `COSMOS_CONTAINER_ATTENDANCE` = `attendance_records`
+- `COSMOS_DATABASE` = `sabo`
+- `COSMOS_CONTAINER_VISITS` = `outdoor_visits`
 - `COSMOS_CONTAINER_ACTIVITIES` = `activities`
-- `COSMOS_CONTAINER_TRAFFPUNKTER` = `traffpunkter`
-- `COSMOS_CONTAINER_USERS` = `Users_traffpunkt`
-- `COSMOS_CONTAINER_ADMIN_AUDIT` = `Admin_audit_traffpunkt`
-- `COSMOS_CONTAINER_ATTENDANCE_AUDIT` = `Attendance_audit_traffpunkt`
+- `COSMOS_CONTAINER_HOMES` = `homes`
+- `COSMOS_CONTAINER_COMPANIONS` = `companions`
+- `COSMOS_CONTAINER_USERS` = `users_sabo`
+- `COSMOS_CONTAINER_ADMIN_AUDIT` = `admin_audit_sabo`
+- `COSMOS_CONTAINER_VISIT_AUDIT` = `visit_audit_sabo`
 
 ### Secrets (referera som env)
 - Secret `COSMOS_ENDPOINT` = din Cosmos endpoint
@@ -80,8 +81,8 @@ Spara/skapa Container App.
 - Logga in via Azure AD
 - Testa i appen:
   - Hämta/Skapa aktivitet
-  - Skapa träffpunkt (admin)
-  - Skapa närvaropost (ny aktivitet auto‑skapas idempotent)
+  - Lägg till äldreboende + avdelning (admin)
+  - Registrera utevistelse (ny aktivitet auto‑skapas vid behov)
   - Hämta statistik
 
 ## 5) Vanliga fel och snabba fixar

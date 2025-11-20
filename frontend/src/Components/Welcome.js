@@ -35,7 +35,7 @@ const Welcome = () => {
           >
             <div className="welcome-container">
               <div className="card welcome-card">
-                <h1 className="welcome-title">Träffpunktsstatistik</h1>
+                <h1 className="welcome-title">SÄBO – Utevistelser</h1>
                 <p className="loading-text">Laddar autentisering...</p>
               </div>
             </div>
@@ -55,9 +55,9 @@ const Welcome = () => {
                   alt="Skövde Kommun"
                   className="welcome-logo"
                 />
-                <h1 className="welcome-title">Träffpunktsstatistik</h1>
+                <h1 className="welcome-title">SÄBO – Utevistelser</h1>
                 <p className="welcome-subtitle">
-                  Logga in med ditt Skövde kommun-konto för att registrera och visa statistik.
+                  Logga in med ditt Skövde kommun-konto för att registrera utevistelser och se statistik.
                 </p>
                 <button
                   onClick={handleLogin}

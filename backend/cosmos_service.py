@@ -7,16 +7,29 @@ from datetime import datetime
 from azure.cosmos import CosmosClient, PartitionKey
 from azure.cosmos.exceptions import CosmosHttpResponseError, CosmosResourceNotFoundError
 
+MAX_DEPARTMENTS_PER_HOME = 20
+
 
 def _iso_now() -> str:
     return datetime.utcnow().isoformat()
+
+
+def _slugify(value: Optional[str]) -> str:
+    if not value:
+        return ''
+    slug = value.strip().lower()
+    slug = slug.replace('å', 'a').replace('ä', 'a').replace('ö', 'o')
+    slug = slug.replace(' ', '-')
+    slug = re.sub(r'[^a-z0-9-]', '', slug)
+    slug = re.sub(r'-+', '-', slug).strip('-')
+    return slug
 
 
 class CosmosService:
     def __init__(self):
         endpoint = os.getenv('COSMOS_ENDPOINT')
         key = os.getenv('COSMOS_KEY')
-        db_name = os.getenv('COSMOS_DATABASE', 'traffpunkt')
+        db_name = os.getenv('COSMOS_DATABASE', 'sabo')
         if not endpoint or not key:
             raise RuntimeError('COSMOS_ENDPOINT and COSMOS_KEY must be set')
 
@@ -29,23 +42,26 @@ class CosmosService:
             raise RuntimeError(f'Failed to ensure Cosmos DB database {db_name}: {e}')
 
         # Containers and partition keys
-        self.c_att = self._ensure_container(
-            os.getenv('COSMOS_CONTAINER_ATTENDANCE', 'attendance_records'), '/traffpunkt_id'
+        self.c_visits = self._ensure_container(
+            os.getenv('COSMOS_CONTAINER_VISITS', 'outdoor_visits'), '/home_id'
         )
         self.c_act = self._ensure_container(
             os.getenv('COSMOS_CONTAINER_ACTIVITIES', 'activities'), '/id'
         )
-        self.c_tp = self._ensure_container(
-            os.getenv('COSMOS_CONTAINER_TRAFFPUNKTER', 'traffpunkter'), '/id'
+        self.c_homes = self._ensure_container(
+            os.getenv('COSMOS_CONTAINER_HOMES', 'homes'), '/id'
+        )
+        self.c_comp = self._ensure_container(
+            os.getenv('COSMOS_CONTAINER_COMPANIONS', 'companions'), '/id'
         )
         self.c_users = self._ensure_container(
-            os.getenv('COSMOS_CONTAINER_USERS', 'Users_traffpunkt'), '/id'
+            os.getenv('COSMOS_CONTAINER_USERS', 'users_sabo'), '/id'
         )
         self.c_admin_audit = self._ensure_container(
-            os.getenv('COSMOS_CONTAINER_ADMIN_AUDIT', 'Admin_audit_traffpunkt'), '/id'
+            os.getenv('COSMOS_CONTAINER_ADMIN_AUDIT', 'admin_audit_sabo'), '/id'
         )
-        self.c_att_audit = self._ensure_container(
-            os.getenv('COSMOS_CONTAINER_ATTENDANCE_AUDIT', 'Attendance_audit_traffpunkt'), '/id'
+        self.c_visit_audit = self._ensure_container(
+            os.getenv('COSMOS_CONTAINER_VISIT_AUDIT', 'visit_audit_sabo'), '/id'
         )
 
     def _ensure_container(self, container_id: str, partition_path: str):
@@ -57,40 +73,54 @@ class CosmosService:
         except CosmosHttpResponseError as e:
             raise RuntimeError(f'Failed to ensure container {container_id}: {e}')
 
-    # ---- Traffpunkter ----
-    def get_all_traffpunkter(self) -> List[Dict]:
+    # ---- Äldreboenden ----
+    def get_all_homes(self) -> List[Dict]:
         query = 'SELECT * FROM c WHERE c.active = true'
-        items = list(self.c_tp.query_items(query=query, enable_cross_partition_query=True))
+        items = list(self.c_homes.query_items(query=query, enable_cross_partition_query=True))
+        for item in items:
+            departments = item.get('departments') or []
+            departments.sort(key=lambda x: (x.get('name') or '').lower())
+            item['departments'] = departments
         items.sort(key=lambda x: (x.get('name') or '').lower())
         return items
 
-    def add_traffpunkt(self, data: Dict) -> Optional[str]:
+    def get_home(self, home_id: str) -> Optional[Dict]:
+        if not home_id:
+            return None
+        try:
+            doc = self.c_homes.read_item(item=home_id, partition_key=home_id)
+            if doc.get('departments'):
+                doc['departments'].sort(key=lambda x: (x.get('name') or '').lower())
+            return doc
+        except CosmosResourceNotFoundError:
+            return None
+
+    def add_home(self, data: Dict) -> Optional[str]:
         name = (data.get('name') or '').strip()
         if not name:
             return None
-        # Create URL-friendly id (match Firestore logic)
-        tid = name.lower().replace(' ', '-').replace('å', 'a').replace('ä', 'a').replace('ö', 'o')
-        tid = re.sub(r'[^a-z0-9-]', '', tid)
+        home_id = _slugify(name)
+        if not home_id:
+            return None
         try:
-            # Check existing
             try:
-                _ = self.c_tp.read_item(item=tid, partition_key=tid)
+                _ = self.c_homes.read_item(item=home_id, partition_key=home_id)
                 return None  # already exists
             except CosmosResourceNotFoundError:
                 pass
 
             doc = {
-                'id': tid,
+                'id': home_id,
                 'name': name,
                 'active': bool(data.get('active', True)),
                 'address': data.get('address', ''),
                 'description': data.get('description', ''),
                 'created_at': _iso_now(),
+                'departments': data.get('departments') or [],
             }
-            self.c_tp.create_item(doc)
-            return tid
+            self.c_homes.create_item(doc)
+            return home_id
         except CosmosHttpResponseError as e:
-            # Swallow only 409 conflicts to emulate idempotent create; propagate others.
             if getattr(e, 'status_code', None) == 409:
                 return None
             raise
@@ -105,6 +135,125 @@ class CosmosService:
             x.get('sort_order') if isinstance(x.get('sort_order'), (int, float)) else 0
         ))
         return items
+
+    # ---- Companions ----
+    def get_all_companions(self) -> List[Dict]:
+        query = 'SELECT * FROM c WHERE c.active = true'
+        items = list(self.c_comp.query_items(query=query, enable_cross_partition_query=True))
+        items.sort(key=lambda x: (x.get('name') or '').lower())
+        return items
+
+    def get_companion(self, companion_id: str) -> Optional[Dict]:
+        if not companion_id:
+            return None
+        try:
+            return self.c_comp.read_item(item=companion_id, partition_key=companion_id)
+        except CosmosResourceNotFoundError:
+            return None
+
+    def add_companion(self, data: Dict) -> Optional[str]:
+        name = (data.get('name') or '').strip()
+        if not name:
+            return None
+        companion_id = _slugify(name)
+        if not companion_id:
+            return None
+        try:
+            try:
+                _ = self.c_comp.read_item(item=companion_id, partition_key=companion_id)
+                return None
+            except CosmosResourceNotFoundError:
+                pass
+            doc = {
+                'id': companion_id,
+                'name': name,
+                'active': bool(data.get('active', True)),
+                'created_at': _iso_now(),
+            }
+            self.c_comp.create_item(doc)
+            return companion_id
+        except CosmosHttpResponseError as e:
+            if getattr(e, 'status_code', None) == 409:
+                return None
+            raise
+
+    def update_companion_name(self, companion_id: str, new_name: str) -> bool:
+        if not companion_id or not new_name:
+            return False
+        try:
+            doc = self.c_comp.read_item(item=companion_id, partition_key=companion_id)
+            doc['name'] = new_name
+            self.c_comp.replace_item(item=companion_id, body=doc, partition_key=companion_id)
+            return True
+        except CosmosResourceNotFoundError:
+            return False
+
+    def deactivate_companion(self, companion_id: str) -> bool:
+        if not companion_id:
+            return False
+        try:
+            doc = self.c_comp.read_item(item=companion_id, partition_key=companion_id)
+            doc['active'] = False
+            self.c_comp.replace_item(item=companion_id, body=doc, partition_key=companion_id)
+            return True
+        except CosmosResourceNotFoundError:
+            return False
+
+    # ---- Departments ----
+    def add_department(self, home_id: str, name: str) -> Optional[Dict]:
+        doc = self.get_home(home_id)
+        if not doc:
+            raise ValueError('home_not_found')
+        departments = doc.get('departments') or []
+        if len(departments) >= MAX_DEPARTMENTS_PER_HOME:
+            raise ValueError('max_departments')
+        slug = _slugify(name)
+        if not slug:
+            raise ValueError('invalid_department')
+        dept_id = f"{home_id}__{slug}"
+        if any(dept.get('id') == dept_id for dept in departments):
+            return None
+        new_dept = {
+            'id': dept_id,
+            'slug': slug,
+            'name': name,
+            'active': True,
+            'created_at': _iso_now(),
+        }
+        departments.append(new_dept)
+        doc['departments'] = departments
+        self.c_homes.replace_item(item=home_id, body=doc, partition_key=home_id)
+        return new_dept
+
+    def update_department(self, home_id: str, department_id: str, *, name: Optional[str] = None, active: Optional[bool] = None) -> bool:
+        doc = self.get_home(home_id)
+        if not doc:
+            return False
+        updated = False
+        for dept in doc.get('departments') or []:
+            if dept.get('id') == department_id:
+                if name:
+                    dept['name'] = name
+                if active is not None:
+                    dept['active'] = bool(active)
+                updated = True
+                break
+        if not updated:
+            return False
+        self.c_homes.replace_item(item=home_id, body=doc, partition_key=home_id)
+        return True
+
+    def remove_department(self, home_id: str, department_id: str) -> bool:
+        doc = self.get_home(home_id)
+        if not doc:
+            return False
+        departments = doc.get('departments') or []
+        new_departments = [dept for dept in departments if dept.get('id') != department_id]
+        if len(new_departments) == len(departments):
+            return False
+        doc['departments'] = new_departments
+        self.c_homes.replace_item(item=home_id, body=doc, partition_key=home_id)
+        return True
 
     def get_activity(self, activity_id: str) -> Optional[Dict]:
         if not activity_id:
@@ -149,7 +298,7 @@ class CosmosService:
             except CosmosHttpResponseError as e:
                 # Idempotency under concurrency:
                 # When multiple requests attempt to auto-create the same activity at the
-                # same time (e.g., concurrent /api/attendance submissions), Cosmos may
+                # same time (e.g., concurrent /api/visits submissions), Cosmos may
                 # return 409 Conflict for the later creates. Treat 409 as "already
                 # exists" to match Firestore's upsert-like semantics and avoid 500s.
                 code = getattr(e, 'status_code', None)
@@ -205,17 +354,15 @@ class CosmosService:
         except CosmosResourceNotFoundError:
             return False
 
-        # Update attendance records with old name
+        # Update visit records with old name
         if old_name and old_name != new_name:
-            q = 'SELECT c.id, c.traffpunkt_id FROM c WHERE c.activity = @old'
+            q = 'SELECT c.id, c.home_id FROM c WHERE c.activity = @old'
             params = [{'name': '@old', 'value': old_name}]
-            for item in self.c_att.query_items(query=q, parameters=params, enable_cross_partition_query=True):
-                # fetch full doc
-                # We don't know pk from query except we selected traffpunkt_id
+            for item in self.c_visits.query_items(query=q, parameters=params, enable_cross_partition_query=True):
                 try:
-                    full = self.c_att.read_item(item=item['id'], partition_key=item['traffpunkt_id'])
+                    full = self.c_visits.read_item(item=item['id'], partition_key=item['home_id'])
                     full['activity'] = new_name
-                    self.c_att.replace_item(item=item['id'], body=full, partition_key=item['traffpunkt_id'])
+                    self.c_visits.replace_item(item=item['id'], body=full, partition_key=item['home_id'])
                 except CosmosHttpResponseError:
                     continue
         return True
@@ -231,8 +378,8 @@ class CosmosService:
         except CosmosResourceNotFoundError:
             return False
 
-    # ---- Attendance ----
-    def add_attendance_record(self, data: Dict) -> str:
+    # ---- Outdoor visits ----
+    def add_visit(self, data: Dict) -> str:
         d = dict(data)
         if not d.get('id'):
             d['id'] = str(uuid4())
@@ -245,29 +392,45 @@ class CosmosService:
             d['last_modified_at'] = d['registered_at']
         if 'edit_count' not in d:
             d['edit_count'] = 0
-        self.c_att.create_item(d)
+        self.c_visits.create_item(d)
         return d['id']
 
-    def get_statistics(self, traffpunkt_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None) -> List[Dict]:
+    def get_statistics(self, home_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None,
+                       department_id: Optional[str] = None, activity_id: Optional[str] = None, companion_id: Optional[str] = None,
+                       offer_status: Optional[str] = None, visit_type: Optional[str] = None) -> List[Dict]:
         # Build SQL query dynamically
         clauses = []
         params = []
-        if traffpunkt_id:
-            clauses.append('c.traffpunkt_id = @tp')
-            params.append({'name': '@tp', 'value': traffpunkt_id})
+        if home_id:
+            clauses.append('c.home_id = @home')
+            params.append({'name': '@home', 'value': home_id})
         if date_from:
             clauses.append('c.date >= @df')
             params.append({'name': '@df', 'value': date_from})
         if date_to:
             clauses.append('c.date <= @dt')
             params.append({'name': '@dt', 'value': date_to})
+        if department_id:
+            clauses.append('c.department_id = @dept')
+            params.append({'name': '@dept', 'value': department_id})
+        if activity_id:
+            clauses.append('c.activity_id = @act')
+            params.append({'name': '@act', 'value': activity_id})
+        if companion_id:
+            clauses.append('c.companion_id = @comp')
+            params.append({'name': '@comp', 'value': companion_id})
+        if offer_status:
+            clauses.append('c.offer_status = @status')
+            params.append({'name': '@status', 'value': offer_status})
+        if visit_type:
+            clauses.append('c.visit_type = @vt')
+            params.append({'name': '@vt', 'value': visit_type})
         where = (' WHERE ' + ' AND '.join(clauses)) if clauses else ''
         q = f'SELECT * FROM c{where}'
-        items = list(self.c_att.query_items(query=q, parameters=params, enable_cross_partition_query=True))
+        items = list(self.c_visits.query_items(query=q, parameters=params, enable_cross_partition_query=True))
         return items
 
-    def list_my_attendance(self, oid: str, email: Optional[str], date_from: Optional[str], date_to: Optional[str], limit: int = 500) -> List[Dict]:
-        res: List[Dict] = []
+    def list_my_visits(self, oid: str, email: Optional[str], date_from: Optional[str], date_to: Optional[str], limit: int = 500) -> List[Dict]:
         clauses = ['c.registered_by_oid = @oid']
         params = [{'name': '@oid', 'value': oid}]
         if date_from:
@@ -276,74 +439,77 @@ class CosmosService:
         if date_to:
             clauses.append('c.date <= @dt')
             params.append({'name': '@dt', 'value': date_to})
-        q1 = f'SELECT * FROM c WHERE {" AND ".join(clauses)}'
-        res.extend(list(self.c_att.query_items(query=q1, parameters=params, enable_cross_partition_query=True)))
+        q = f'SELECT * FROM c WHERE {" AND ".join(clauses)}'
+        res = list(self.c_visits.query_items(query=q, parameters=params, enable_cross_partition_query=True))
 
-        # legacy fallback by email
+        # Legacy fallback: records created before OID was stored
         if email:
-            clauses2 = ['c.registered_by = @em']
-            params2 = [{'name': '@em', 'value': email}]
+            clauses_email = ['c.registered_by = @em']
+            params_email = [{'name': '@em', 'value': email}]
             if date_from:
-                clauses2.append('c.date >= @df2')
-                params2.append({'name': '@df2', 'value': date_from})
+                clauses_email.append('c.date >= @df2')
+                params_email.append({'name': '@df2', 'value': date_from})
             if date_to:
-                clauses2.append('c.date <= @dt2')
-                params2.append({'name': '@dt2', 'value': date_to})
-            q2 = f'SELECT * FROM c WHERE {" AND ".join(clauses2)}'
-            for d in self.c_att.query_items(query=q2, parameters=params2, enable_cross_partition_query=True):
+                clauses_email.append('c.date <= @dt2')
+                params_email.append({'name': '@dt2', 'value': date_to})
+            q2 = f'SELECT * FROM c WHERE {" AND ".join(clauses_email)}'
+            for d in self.c_visits.query_items(query=q2, parameters=params_email, enable_cross_partition_query=True):
                 if not any(r.get('id') == d.get('id') for r in res):
                     res.append(d)
 
-        # Sort by date desc then registered_at desc (ISO strings sort correctly)
         res.sort(key=lambda x: (x.get('date') or '', x.get('registered_at') or ''), reverse=True)
         return res[: max(1, min(limit, 500))]
 
-    def get_attendance(self, doc_id: str) -> Optional[Dict]:
+    def get_visit(self, doc_id: str) -> Optional[Dict]:
         # Unknown partition key: query by id
         q = 'SELECT TOP 1 * FROM c WHERE c.id = @id'
         p = [{'name': '@id', 'value': doc_id}]
-        docs = list(self.c_att.query_items(query=q, parameters=p, enable_cross_partition_query=True))
+        docs = list(self.c_visits.query_items(query=q, parameters=p, enable_cross_partition_query=True))
         return docs[0] if docs else None
 
-    def update_attendance(self, doc_id: str, new_data: Dict) -> Optional[Dict]:
-        existing = self.get_attendance(doc_id)
+    def update_visit(self, doc_id: str, new_data: Dict) -> Optional[Dict]:
+        existing = self.get_visit(doc_id)
         if not existing:
             return None
         edit_count = int(existing.get('edit_count', 0)) + 1
         new_data2 = {**new_data, 'edit_count': edit_count, 'last_modified_at': _iso_now()}
         # Preserve immutable/partition fields
         new_data2['id'] = doc_id
-        if existing.get('traffpunkt_id'):
-            new_data2['traffpunkt_id'] = existing['traffpunkt_id']
-        # Preserve partition key value
-        pk = existing.get('traffpunkt_id')
+        if existing.get('home_id'):
+            new_data2['home_id'] = existing['home_id']
+        elif existing.get('traffpunkt_id'):
+            new_data2['home_id'] = existing['traffpunkt_id']
+        # Preserve partition key value with legacy fallback
+        pk = existing.get('home_id') or existing.get('traffpunkt_id')
         if not pk:
             return None
-        self.c_att.replace_item(item=doc_id, body=new_data2, partition_key=pk)
+        self.c_visits.replace_item(item=doc_id, body=new_data2, partition_key=pk)
         return new_data2
 
-    def delete_attendance(self, doc_id: str) -> bool:
-        existing = self.get_attendance(doc_id)
+    def delete_visit(self, doc_id: str) -> bool:
+        existing = self.get_visit(doc_id)
         if not existing:
             return False
-        pk = existing.get('traffpunkt_id')
+        pk = existing.get('home_id') or existing.get('traffpunkt_id')
+        if not pk:
+            return False
         try:
-            self.c_att.delete_item(item=doc_id, partition_key=pk)
+            self.c_visits.delete_item(item=doc_id, partition_key=pk)
             return True
         except CosmosHttpResponseError:
             return False
 
-    def write_attendance_audit(self, action: str, actor_oid: str, actor_email: str, attendance_id: str, changed_fields: Optional[List[str]] = None):
+    def write_visit_audit(self, action: str, actor_oid: str, actor_email: str, visit_id: str, changed_fields: Optional[List[str]] = None):
         doc = {
             'id': str(uuid4()),
             'action': action,
             'actor_oid': actor_oid,
             'actor_email': (actor_email or '').lower(),
-            'attendance_id': attendance_id,
+            'visit_id': visit_id,
             'changed_fields': changed_fields or [],
             'ts': _iso_now(),
         }
-        self.c_att_audit.create_item(doc)
+        self.c_visit_audit.create_item(doc)
 
     # ---- Users & roles ----
     def upsert_user(self, oid: str, email: str, display_name: str) -> None:

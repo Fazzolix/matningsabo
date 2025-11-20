@@ -11,7 +11,7 @@ from auth_utils import require_auth, get_azure_config, get_azure_user, require_a
 from cosmos_service import CosmosService
 from security import (
     init_security_headers, rate_limit, rate_limit_auth, rate_limiter,
-    validate_attendance_data, sanitize_string, validate_traffpunkt_name
+    validate_attendance_data, sanitize_string, validate_home_name
 )
 
 # Konfigurera loggning
@@ -34,7 +34,7 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('FLASK_ENV') != 'development'
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['SESSION_COOKIE_NAME'] = 'traffpunkt_session'
+app.config['SESSION_COOKIE_NAME'] = 'sabo_session'
 
 # CORS med säkerhet – säkerställ att vi aldrig skickar None till Flask-CORS
 default_origin = 'http://localhost:3000'
@@ -86,24 +86,24 @@ def azure_config():
 def azure_user():
     return get_azure_user()
 
-# Hämta alla träffpunkter
-@app.route('/api/traffpunkter')
+# Hämta alla äldreboenden
+@app.route('/api/aldreboenden')
 @require_auth
 @rate_limit(max_requests=1000, window_seconds=60)
-def get_traffpunkter():
+def get_homes():
     try:
-        traffpunkter = db_service.get_all_traffpunkter()
-        return jsonify(traffpunkter), 200
+        homes = db_service.get_all_homes()
+        return jsonify(homes), 200
     except Exception as e:
-        logger.error(f"Error fetching traffpunkter: {str(e)}")
-        return jsonify({'error': 'Kunde inte hämta träffpunkter'}), 500
+        logger.error(f"Error fetching äldreboenden: {str(e)}")
+        return jsonify({'error': 'Kunde inte hämta äldreboenden'}), 500
 
-# Lägg till en ny träffpunkt
-@app.route('/api/traffpunkter', methods=['POST'])
+# Lägg till ett nytt äldreboende
+@app.route('/api/aldreboenden', methods=['POST'])
 @require_auth
 @require_admin
 @rate_limit(max_requests=100, window_seconds=60)
-def add_traffpunkt():
+def add_home():
     user_oid = session.get('azure_user', {}).get('oid', 'unknown')
     
     try:
@@ -114,7 +114,7 @@ def add_traffpunkt():
         name = data.get('name', '').strip()
         
         # Validera namn
-        is_valid, error_msg = validate_traffpunkt_name(name)
+        is_valid, error_msg = validate_home_name(name)
         if not is_valid:
             return jsonify({'error': error_msg}), 400
         
@@ -123,17 +123,82 @@ def add_traffpunkt():
         data['address'] = sanitize_string(data.get('address', ''), max_length=200)
         data['description'] = sanitize_string(data.get('description', ''), max_length=500)
         
-        traffpunkt_id = db_service.add_traffpunkt(data)
+        home_id = db_service.add_home(data)
 
-        if traffpunkt_id is None:
-            return jsonify({'error': f'Träffpunkt med namnet "{name}" finns redan.'}), 409
+        if home_id is None:
+            return jsonify({'error': f'Äldreboende med namnet "{name}" finns redan.'}), 409
 
-        logger.info(f"User OID {user_oid} added traffpunkt with id '{traffpunkt_id}'.")
-        return jsonify({'success': True, 'id': traffpunkt_id}), 201
+        logger.info(f"User OID {user_oid} added home with id '{home_id}'.")
+        return jsonify({'success': True, 'id': home_id}), 201
         
     except Exception as e:
-        logger.error(f"Error adding traffpunkt: {str(e)}")
-        return jsonify({'error': 'Ett fel uppstod vid skapande av träffpunkt'}), 500
+        logger.error(f"Error adding home: {str(e)}")
+        return jsonify({'error': 'Ett fel uppstod vid skapande av äldreboende'}), 500
+
+
+@app.route('/api/aldreboenden/<home_id>/departments', methods=['POST'])
+@require_auth
+@require_admin
+@rate_limit(max_requests=100, window_seconds=60)
+def add_department(home_id):
+    try:
+        data = request.get_json() or {}
+        name = sanitize_string(data.get('name', ''), max_length=80)
+        if not name:
+            return jsonify({'error': 'Avdelningsnamn krävs'}), 400
+        try:
+            dept = db_service.add_department(home_id, name)
+        except ValueError as exc:
+            msg = str(exc)
+            if msg == 'max_departments':
+                return jsonify({'error': 'Max 20 avdelningar per äldreboende'}), 400
+            if msg == 'invalid_department':
+                return jsonify({'error': 'Ogiltigt avdelningsnamn'}), 400
+            if msg == 'home_not_found':
+                return jsonify({'error': 'Äldreboendet hittades inte'}), 404
+            raise
+        if dept is None:
+            return jsonify({'error': 'Avdelningen finns redan'}), 409
+        return jsonify(dept), 201
+    except Exception as e:
+        logger.error(f"Error adding department: {e}")
+        return jsonify({'error': 'Kunde inte lägga till avdelning'}), 500
+
+
+@app.route('/api/aldreboenden/<home_id>/departments/<department_id>', methods=['PUT'])
+@require_auth
+@require_admin
+@rate_limit(max_requests=100, window_seconds=60)
+def update_department(home_id, department_id):
+    try:
+        data = request.get_json() or {}
+        name = data.get('name')
+        active = data.get('active')
+        sanitized_name = sanitize_string(name, max_length=80) if name else None
+        if name is not None and not sanitized_name:
+            return jsonify({'error': 'Avdelningsnamn får inte vara tomt'}), 400
+        ok = db_service.update_department(home_id, department_id, name=sanitized_name, active=active)
+        if not ok:
+            return jsonify({'error': 'Avdelningen hittades inte'}), 404
+        return jsonify({'success': True}), 200
+    except Exception as e:
+        logger.error(f"Error updating department: {e}")
+        return jsonify({'error': 'Kunde inte uppdatera avdelning'}), 500
+
+
+@app.route('/api/aldreboenden/<home_id>/departments/<department_id>', methods=['DELETE'])
+@require_auth
+@require_admin
+@rate_limit(max_requests=60, window_seconds=60)
+def delete_department(home_id, department_id):
+    try:
+        ok = db_service.remove_department(home_id, department_id)
+        if not ok:
+            return jsonify({'error': 'Avdelningen hittades inte'}), 404
+        return jsonify({'success': True}), 200
+    except Exception as e:
+        logger.error(f"Error deleting department: {e}")
+        return jsonify({'error': 'Kunde inte ta bort avdelning'}), 500
 
 # Hämta aktiviteter
 @app.route('/api/activities')
@@ -240,11 +305,76 @@ def delete_activity(activity_id):
         logger.error(f"Error deactivating activity {activity_id}: {e}")
         return jsonify({'error': 'Kunde inte ta bort aktiviteten'}), 500
 
-# Registrera närvaro
-@app.route('/api/attendance', methods=['POST'])
+
+@app.route('/api/companions')
+@require_auth
+@rate_limit(max_requests=1000, window_seconds=60)
+def get_companions():
+    try:
+        companions = db_service.get_all_companions()
+        return jsonify(companions), 200
+    except Exception as e:
+        logger.error(f"Error fetching companions: {e}")
+        return jsonify({'error': 'Kunde inte hämta med vem-lista'}), 500
+
+
+@app.route('/api/companions', methods=['POST'])
+@require_auth
+@require_admin
+@rate_limit(max_requests=100, window_seconds=60)
+def add_companion():
+    try:
+        body = request.get_json() or {}
+        name = sanitize_string((body.get('name') or ''), max_length=100)
+        if not name:
+            return jsonify({'error': 'Namn krävs'}), 400
+        companion_id = db_service.add_companion({'name': name})
+        if companion_id is None:
+            return jsonify({'error': 'Med vem finns redan'}), 409
+        return jsonify({'success': True, 'id': companion_id}), 201
+    except Exception as e:
+        logger.error(f"Error adding companion: {e}")
+        return jsonify({'error': 'Kunde inte lägga till'}), 500
+
+
+@app.route('/api/companions/<companion_id>', methods=['PUT'])
+@require_auth
+@require_admin
+@rate_limit(max_requests=60, window_seconds=60)
+def rename_companion(companion_id):
+    try:
+        body = request.get_json() or {}
+        name = sanitize_string((body.get('name') or ''), max_length=100)
+        if not name:
+            return jsonify({'error': 'Namn krävs'}), 400
+        ok = db_service.update_companion_name(companion_id, name)
+        if not ok:
+            return jsonify({'error': 'Hittades inte'}), 404
+        return jsonify({'success': True}), 200
+    except Exception as e:
+        logger.error(f"Error renaming companion: {e}")
+        return jsonify({'error': 'Kunde inte uppdatera'}), 500
+
+
+@app.route('/api/companions/<companion_id>', methods=['DELETE'])
+@require_auth
+@require_admin
+@rate_limit(max_requests=60, window_seconds=60)
+def delete_companion(companion_id):
+    try:
+        ok = db_service.deactivate_companion(companion_id)
+        if not ok:
+            return jsonify({'error': 'Hittades inte'}), 404
+        return jsonify({'success': True}), 200
+    except Exception as e:
+        logger.error(f"Error deleting companion: {e}")
+        return jsonify({'error': 'Kunde inte ta bort'}), 500
+
+# Registrera utevistelse
+@app.route('/api/visits', methods=['POST'])
 @require_auth
 @rate_limit(max_requests=500, window_seconds=60)  # Många kan registrera samtidigt
-def register_attendance():
+def register_visit():
     try:
         data = request.get_json()
         if not data:
@@ -252,40 +382,91 @@ def register_attendance():
             
         user_email = session.get('azure_user', {}).get('email', '')
         user_oid = session.get('azure_user', {}).get('oid', 'unknown')
-        
+
+        home_id = (data.get('home_id') or '').strip()
+        home_doc = db_service.get_home(home_id)
+        if not home_doc:
+            return jsonify({'error': 'Äldreboendet hittades inte'}), 400
+        data['home_id'] = home_id
+
         # Validera all data
-        is_valid, errors = validate_attendance_data(data)
+        is_valid, errors = validate_attendance_data(data, home_doc)
         if not is_valid:
             return jsonify({'errors': errors}), 400
-        
-        # Sanitera aktivitetsnamn
-        data['activity'] = sanitize_string(data['activity'], max_length=100)
-        
+
+        # Sanitera och normalisera fält
+        gender_counts = data.get('gender_counts') or {}
+        data['gender_counts'] = {
+            'men': int(gender_counts.get('men', 0)),
+            'women': int(gender_counts.get('women', 0))
+        }
+
+        total = data['gender_counts']['men'] + data['gender_counts']['women']
+        data['total_participants'] = total
+
+        offer_status = data.get('offer_status')
+        visit_type = data.get('visit_type')
+        activity_name = sanitize_string(data.get('activity_name', ''), max_length=100)
+        companion_name = sanitize_string(data.get('companion_name', ''), max_length=100)
+        data['activity'] = activity_name
+        data['activity_name'] = activity_name
+        data['companion'] = companion_name
+        data['companion_name'] = companion_name
+        data['activity_id'] = sanitize_string(data.get('activity_id', ''), max_length=120)
+        data['companion_id'] = sanitize_string(data.get('companion_id', ''), max_length=120)
+        department_raw = data.get('department_id', '')
+        department_id = department_raw if isinstance(department_raw, str) else ('' if department_raw is None else str(department_raw))
+        if len(department_id) > 160:
+            return jsonify({'error': 'Ogiltigt avdelnings-ID'}), 400
+        data['department_id'] = sanitize_string(department_id, max_length=200)
+
+        if offer_status == 'declined':
+            data['activity'] = ''
+            data['activity_name'] = ''
+            data['activity_id'] = ''
+            data['companion'] = ''
+            data['companion_name'] = ''
+            data['companion_id'] = ''
+            data['duration_minutes'] = None
+
+        duration_value = data.get('duration_minutes')
+        if duration_value is not None:
+            try:
+                data['duration_minutes'] = int(duration_value)
+            except (TypeError, ValueError):
+                data['duration_minutes'] = None
+
+        satisfaction_entries = []
+        for entry in data.get('satisfaction_entries') or []:
+            satisfaction_entries.append({
+                'gender': entry.get('gender'),
+                'rating': int(entry.get('rating'))
+            })
+        data['satisfaction_entries'] = satisfaction_entries
+
+        data['visit_type'] = visit_type
+        data['offer_status'] = offer_status
+
         # Lägg till metadata
         data['registered_by'] = user_email
         data['registered_by_oid'] = user_oid
         data['registered_at'] = datetime.utcnow()
         data['last_modified_at'] = data['registered_at']
         data['edit_count'] = 0
-        
-        # Beräkna totalt antal deltagare
-        total = 0
-        for category in data['participants'].values():
-            total += category.get('men', 0) + category.get('women', 0)
-        data['total_participants'] = total
-        
+
         # Lägg till aktiviteten om den är ny
-        db_service.add_activity_if_not_exists(data.get('activity'))
+        if data.get('activity'):
+            db_service.add_activity_if_not_exists(data.get('activity'))
 
         # Spara i Cosmos DB
-        doc_id = db_service.add_attendance_record(data)
+        doc_id = db_service.add_visit(data)
         
-        logger.info(f"User OID {user_oid} registered attendance for {data['traffpunkt_id']}")
+        logger.info(f"User OID {user_oid} registered visit for {data['home_id']}")
         return jsonify({'success': True, 'id': doc_id}), 201
         
     except Exception as e:
-        logger.error(f"Error registering attendance: {str(e)}")
-        return jsonify({'error': 'Kunde inte registrera närvaro'}), 500
+        logger.error(f"Error registering visit: {str(e)}")
+        return jsonify({'error': 'Kunde inte registrera utevistelse'}), 500
 
 # Hämta statistik
 @app.route('/api/statistics')
@@ -294,10 +475,15 @@ def register_attendance():
 def get_statistics():
     try:
         # Query parameters med validering
-        traffpunkt_id = request.args.get('traffpunkt')
+        home_id = (request.args.get('home') or '').strip() or None
         date_from = request.args.get('from')
         date_to = request.args.get('to')
-        
+        department_id = (request.args.get('department') or '').strip() or None
+        activity_id = (request.args.get('activity') or '').strip() or None
+        companion_id = (request.args.get('companion') or '').strip() or None
+        offer_status = (request.args.get('offer_status') or '').strip() or None
+        visit_type = (request.args.get('visit_type') or '').strip() or None
+
         # Validera datum om de finns
         if date_from:
             try:
@@ -312,9 +498,14 @@ def get_statistics():
                 return jsonify({'error': 'Ogiltigt to-datum format'}), 400
         
         stats = db_service.get_statistics(
-            traffpunkt_id=traffpunkt_id,
+            home_id=home_id,
             date_from=date_from,
-            date_to=date_to
+            date_to=date_to,
+            department_id=department_id,
+            activity_id=activity_id,
+            companion_id=companion_id,
+            offer_status=offer_status,
+            visit_type=visit_type
         )
 
         # Ta bort PII-relaterade fält men låt övriga statistikfält vara orörda
@@ -329,11 +520,11 @@ def get_statistics():
         logger.error(f"Error fetching statistics: {str(e)}")
         return jsonify({'error': 'Kunde inte hämta statistik'}), 500
 
-# ---- My attendance endpoints ----
-@app.route('/api/my-attendance')
+# ---- Mina utevistelser ----
+@app.route('/api/my-visits')
 @require_auth
 @rate_limit(max_requests=60, window_seconds=60)
-def my_attendance():
+def my_visits():
     try:
         azure_user = session.get('azure_user', {})
         oid = azure_user.get('oid')
@@ -354,34 +545,36 @@ def my_attendance():
         except ValueError:
             return jsonify({'error': 'Ogiltigt datumformat'}), 400
 
-        records = db_service.list_my_attendance(oid, email, date_from, date_to, limit=500)
-        # Return summary fields
+        records = db_service.list_my_visits(oid, email, date_from, date_to, limit=500)
         summaries = []
         for r in records:
             summaries.append({
                 'id': r.get('id'),
                 'date': r.get('date'),
-                'time_block': r.get('time_block'),
                 'activity': r.get('activity'),
-                'traffpunkt_id': r.get('traffpunkt_id'),
+                'companion': r.get('companion'),
+                'home_id': r.get('home_id'),
+                'department_id': r.get('department_id'),
+                'offer_status': r.get('offer_status'),
+                'visit_type': r.get('visit_type'),
                 'total_participants': r.get('total_participants', 0),
                 'registered_at': r.get('registered_at')
             })
         return jsonify(summaries), 200
     except Exception as e:
-        logger.error(f"Error in /api/my-attendance: {e}")
+        logger.error(f"Error in /api/my-visits: {e}")
         return jsonify({'error': 'Kunde inte hämta registreringar'}), 500
 
 
-@app.route('/api/attendance/<doc_id>')
+@app.route('/api/visits/<doc_id>')
 @require_auth
 @rate_limit(max_requests=120, window_seconds=60)
-def get_attendance(doc_id):
+def get_visit(doc_id):
     try:
         azure_user = session.get('azure_user', {})
         oid = azure_user.get('oid')
         email = (azure_user.get('email') or '').strip().lower()
-        doc = db_service.get_attendance(doc_id)
+        doc = db_service.get_visit(doc_id)
         if not doc:
             return jsonify({'error': 'Hittades inte'}), 404
         owner_ok = (doc.get('registered_by_oid') == oid) or (doc.get('registered_by', '').strip().lower() == email)
@@ -389,14 +582,14 @@ def get_attendance(doc_id):
             return jsonify({'error': 'Förbjudet'}), 403
         return jsonify(doc), 200
     except Exception as e:
-        logger.error(f"Error in GET /api/attendance/{doc_id}: {e}")
+        logger.error(f"Error in GET /api/visits/{doc_id}: {e}")
         return jsonify({'error': 'Ett fel uppstod'}), 500
 
 
-@app.route('/api/attendance/<doc_id>', methods=['PUT'])
+@app.route('/api/visits/<doc_id>', methods=['PUT'])
 @require_auth
 @rate_limit(max_requests=30, window_seconds=60)
-def update_attendance(doc_id):
+def update_visit(doc_id):
     try:
         azure_user = session.get('azure_user', {})
         oid = azure_user.get('oid')
@@ -404,24 +597,69 @@ def update_attendance(doc_id):
         body = request.get_json() or {}
 
         # Load and verify ownership
-        existing = db_service.get_attendance(doc_id)
+        existing = db_service.get_visit(doc_id)
         if not existing:
             return jsonify({'error': 'Hittades inte'}), 404
         owner_ok = (existing.get('registered_by_oid') == oid) or (existing.get('registered_by', '').strip().lower() == email)
         if not owner_ok:
             return jsonify({'error': 'Förbjudet'}), 403
 
+        body['home_id'] = existing.get('home_id') or existing.get('traffpunkt_id')
+        if not body.get('department_id'):
+            body['department_id'] = existing.get('department_id')
+        home_doc = None
+        if body.get('home_id'):
+            home_doc = db_service.get_home(body.get('home_id'))
+        if not home_doc and existing.get('home_id'):
+            home_doc = db_service.get_home(existing.get('home_id'))
+        # Legacy fallback: allow editing even if home is missing now
+
         # Validate incoming data (require full object fields)
-        is_valid, errors = validate_attendance_data(body)
+        is_valid, errors = validate_attendance_data(body, home_doc, existing_department_id=existing.get('department_id'))
         if not is_valid:
             return jsonify({'errors': errors}), 400
 
-        # Sanitize and recompute totals
-        body['activity'] = sanitize_string(body['activity'], max_length=100)
-        total = 0
-        for category in body['participants'].values():
-            total += category.get('men', 0) + category.get('women', 0)
+        gender_counts = body.get('gender_counts') or {}
+        body['gender_counts'] = {
+            'men': int(gender_counts.get('men', 0)),
+            'women': int(gender_counts.get('women', 0))
+        }
+        total = body['gender_counts']['men'] + body['gender_counts']['women']
         body['total_participants'] = total
+
+        offer_status = body.get('offer_status')
+        body['activity'] = sanitize_string(body.get('activity_name', ''), max_length=100)
+        body['activity_name'] = body['activity']
+        body['activity_id'] = sanitize_string(body.get('activity_id', ''), max_length=120)
+        body['companion'] = sanitize_string(body.get('companion_name', ''), max_length=100)
+        body['companion_name'] = body['companion']
+        body['companion_id'] = sanitize_string(body.get('companion_id', ''), max_length=120)
+        body['department_id'] = sanitize_string(body.get('department_id', existing.get('department_id') or ''), max_length=120)
+
+        if offer_status == 'declined':
+            body['activity'] = ''
+            body['activity_name'] = ''
+            body['activity_id'] = ''
+            body['companion'] = ''
+            body['companion_name'] = ''
+            body['companion_id'] = ''
+            body['duration_minutes'] = None
+        else:
+            try:
+                body['duration_minutes'] = int(body.get('duration_minutes'))
+            except (TypeError, ValueError):
+                body['duration_minutes'] = None
+
+        satisfaction_entries = []
+        for entry in body.get('satisfaction_entries') or []:
+            satisfaction_entries.append({
+                'gender': entry.get('gender'),
+                'rating': int(entry.get('rating'))
+            })
+        body['satisfaction_entries'] = satisfaction_entries
+
+        if body.get('activity'):
+            db_service.add_activity_if_not_exists(body.get('activity'))
 
         # Preserve immutable fields
         body['id'] = doc_id
@@ -429,47 +667,47 @@ def update_attendance(doc_id):
         body['registered_by_oid'] = existing.get('registered_by_oid')
         body['registered_at'] = existing.get('registered_at')
 
-        updated = db_service.update_attendance(doc_id, body)
+        updated = db_service.update_visit(doc_id, body)
         if not updated:
             return jsonify({'error': 'Hittades inte'}), 404
 
         # Audit
         try:
             changed_fields = [k for k in body.keys() if existing.get(k) != body.get(k)]
-            db_service.write_attendance_audit('update', oid, email, doc_id, changed_fields)
+            db_service.write_visit_audit('update', oid, email, doc_id, changed_fields)
         except Exception as e:
-            logger.error(f"Failed to write attendance audit (update): {e}")
+            logger.error(f"Failed to write visit audit (update): {e}")
 
         return jsonify({'success': True}), 200
     except Exception as e:
-        logger.error(f"Error in PUT /api/attendance/{doc_id}: {e}")
+        logger.error(f"Error in PUT /api/visits/{doc_id}: {e}")
         return jsonify({'error': 'Kunde inte uppdatera'}), 500
 
 
-@app.route('/api/attendance/<doc_id>', methods=['DELETE'])
+@app.route('/api/visits/<doc_id>', methods=['DELETE'])
 @require_auth
 @rate_limit(max_requests=30, window_seconds=60)
-def delete_attendance(doc_id):
+def delete_visit(doc_id):
     try:
         azure_user = session.get('azure_user', {})
         oid = azure_user.get('oid')
         email = (azure_user.get('email') or '').strip().lower()
-        existing = db_service.get_attendance(doc_id)
+        existing = db_service.get_visit(doc_id)
         if not existing:
             return jsonify({'error': 'Hittades inte'}), 404
         owner_ok = (existing.get('registered_by_oid') == oid) or (existing.get('registered_by', '').strip().lower() == email)
         if not owner_ok:
             return jsonify({'error': 'Förbjudet'}), 403
-        ok = db_service.delete_attendance(doc_id)
+        ok = db_service.delete_visit(doc_id)
         if not ok:
             return jsonify({'error': 'Hittades inte'}), 404
         try:
-            db_service.write_attendance_audit('delete', oid, email, doc_id)
+            db_service.write_visit_audit('delete', oid, email, doc_id)
         except Exception as e:
-            logger.error(f"Failed to write attendance audit (delete): {e}")
+            logger.error(f"Failed to write visit audit (delete): {e}")
         return jsonify({'success': True}), 200
     except Exception as e:
-        logger.error(f"Error in DELETE /api/attendance/{doc_id}: {e}")
+        logger.error(f"Error in DELETE /api/visits/{doc_id}: {e}")
         return jsonify({'error': 'Kunde inte ta bort'}), 500
 
 # Me endpoint with role flags

@@ -11,7 +11,7 @@ import secrets
 
 # Importera säkerhetsmoduler
 from auth_utils_secure import require_auth, get_user_info_from_token
-from validators import validate_attendance_data, sanitize_string
+from security import validate_attendance_data, sanitize_string
 from simple_rate_limiter import rate_limit, rate_limit_auth, rate_limiter
 from security_headers import init_security_headers
 
@@ -91,9 +91,10 @@ def login():
 def create_attendance():
     try:
         data = request.get_json()
-        
+        # Dummy home context for validation example; replace with a fetched home doc in real usage
+        home_doc = {}
         # Validera all input
-        is_valid, errors = validate_attendance_data(data)
+        is_valid, errors = validate_attendance_data(data, home_doc)
         if not is_valid:
             return jsonify({'errors': errors}), 400
         
