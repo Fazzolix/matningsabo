@@ -222,7 +222,13 @@ class CosmosService:
         }
         departments.append(new_dept)
         doc['departments'] = departments
-        self.c_homes.replace_item(item=home_id, body=doc, partition_key=home_id)
+        try:
+            self.c_homes.replace_item(item=home_id, body=doc, partition_key=home_id)
+        except CosmosHttpResponseError as e:
+            # If the document disappeared between read and write, surface as not found
+            if getattr(e, 'status_code', None) == 404:
+                raise ValueError('home_not_found')
+            raise
         return new_dept
 
     def update_department(self, home_id: str, department_id: str, *, name: Optional[str] = None, active: Optional[bool] = None) -> bool:
