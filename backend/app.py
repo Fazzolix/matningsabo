@@ -13,6 +13,7 @@ from security import (
     init_security_headers, rate_limit, rate_limit_auth, rate_limiter,
     validate_attendance_data, sanitize_string, validate_home_name
 )
+from azure.cosmos.exceptions import CosmosHttpResponseError
 
 # Konfigurera loggning
 logging.basicConfig(level=logging.INFO)
@@ -157,6 +158,9 @@ def add_department(home_id):
             if msg == 'home_not_found':
                 return jsonify({'error': 'Äldreboendet hittades inte'}), 404
             raise
+        except CosmosHttpResponseError as exc:
+            logger.error(f"Cosmos error adding department for home {home_id}: {exc}")
+            return jsonify({'error': 'Kunde inte lägga till avdelning', 'detail': str(exc)}), 500
         if dept is None:
             return jsonify({'error': 'Avdelningen finns redan'}), 409
         return jsonify(dept), 201
