@@ -224,12 +224,11 @@ class CosmosService:
         departments.append(new_dept)
         doc['departments'] = departments
         try:
-            self.c_homes.replace_item(item=home_id, body=doc, partition_key=home_id)
+            # upsert avoids partition_key kw for compatibility and creates if necessary
+            self.c_homes.upsert_item(doc)
         except CosmosHttpResponseError as e:
-            # If the document disappeared between read and write, surface as not found
             if getattr(e, 'status_code', None) == 404:
                 raise ValueError('home_not_found')
-            # Bubble up with context
             raise
         return new_dept
 
@@ -248,7 +247,7 @@ class CosmosService:
                 break
         if not updated:
             return False
-        self.c_homes.replace_item(item=home_id, body=doc, partition_key=home_id)
+        self.c_homes.upsert_item(doc)
         return True
 
     def remove_department(self, home_id: str, department_id: str) -> bool:
@@ -260,7 +259,7 @@ class CosmosService:
         if len(new_departments) == len(departments):
             return False
         doc['departments'] = new_departments
-        self.c_homes.replace_item(item=home_id, body=doc, partition_key=home_id)
+        self.c_homes.upsert_item(doc)
         return True
 
     def get_activity(self, activity_id: str) -> Optional[Dict]:
