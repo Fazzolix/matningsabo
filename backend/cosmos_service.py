@@ -183,7 +183,7 @@ class CosmosService:
         try:
             doc = self.c_comp.read_item(item=companion_id, partition_key=companion_id)
             doc['name'] = new_name
-            self.c_comp.replace_item(item=companion_id, body=doc, partition_key=companion_id)
+            self.c_comp.upsert_item(doc)
             return True
         except CosmosResourceNotFoundError:
             return False
@@ -194,7 +194,7 @@ class CosmosService:
         try:
             doc = self.c_comp.read_item(item=companion_id, partition_key=companion_id)
             doc['active'] = False
-            self.c_comp.replace_item(item=companion_id, body=doc, partition_key=companion_id)
+            self.c_comp.upsert_item(doc)
             return True
         except CosmosResourceNotFoundError:
             return False
@@ -357,19 +357,22 @@ class CosmosService:
         try:
             doc = self.c_act.read_item(item=activity_id, partition_key=activity_id)
             doc['name'] = new_name
-            self.c_act.replace_item(item=activity_id, body=doc, partition_key=activity_id)
+            self.c_act.upsert_item(doc)
         except CosmosResourceNotFoundError:
             return False
 
         # Update visit records with old name
         if old_name and old_name != new_name:
-            q = 'SELECT c.id, c.home_id FROM c WHERE c.activity = @old'
+            q = 'SELECT c.id, c.home_id, c.traffpunkt_id FROM c WHERE c.activity = @old'
             params = [{'name': '@old', 'value': old_name}]
             for item in self.c_visits.query_items(query=q, parameters=params, enable_cross_partition_query=True):
                 try:
-                    full = self.c_visits.read_item(item=item['id'], partition_key=item['home_id'])
+                    pk = item.get('home_id') or item.get('traffpunkt_id')
+                    if not pk:
+                        continue
+                    full = self.c_visits.read_item(item=item['id'], partition_key=pk)
                     full['activity'] = new_name
-                    self.c_visits.replace_item(item=item['id'], body=full, partition_key=item['home_id'])
+                    self.c_visits.upsert_item(full)
                 except CosmosHttpResponseError:
                     continue
         return True
@@ -380,7 +383,7 @@ class CosmosService:
         try:
             doc = self.c_act.read_item(item=activity_id, partition_key=activity_id)
             doc['active'] = False
-            self.c_act.replace_item(item=activity_id, body=doc, partition_key=activity_id)
+            self.c_act.upsert_item(doc)
             return True
         except CosmosResourceNotFoundError:
             return False
@@ -490,7 +493,7 @@ class CosmosService:
         pk = existing.get('home_id') or existing.get('traffpunkt_id')
         if not pk:
             return None
-        self.c_visits.replace_item(item=doc_id, body=new_data2, partition_key=pk)
+        self.c_visits.upsert_item(new_data2)
         return new_data2
 
     def delete_visit(self, doc_id: str) -> bool:
@@ -531,7 +534,7 @@ class CosmosService:
                 'display_name': display_name or '',
                 'last_login_at': _iso_now(),
             })
-            self.c_users.replace_item(item=oid, body=user, partition_key=oid)
+            self.c_users.upsert_item(user)
         except CosmosResourceNotFoundError:
             doc = {
                 'id': oid,
@@ -567,7 +570,7 @@ class CosmosService:
         roles = dict(user.get('roles') or {})
         roles['admin'] = bool(admin)
         user['roles'] = roles
-        self.c_users.replace_item(item=target_oid, body=user, partition_key=target_oid)
+        self.c_users.upsert_item(user)
         # Audit
         self.c_admin_audit.create_item({
             'id': str(uuid4()),

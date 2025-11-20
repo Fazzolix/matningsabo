@@ -609,6 +609,8 @@ def update_visit(doc_id):
             return jsonify({'error': 'Förbjudet'}), 403
 
         body['home_id'] = existing.get('home_id') or existing.get('traffpunkt_id')
+        if not body['home_id']:
+            return jsonify({'error': 'Äldreboendet saknas på posten'}), 400
         if not body.get('department_id'):
             body['department_id'] = existing.get('department_id')
         home_doc = None
@@ -671,7 +673,11 @@ def update_visit(doc_id):
         body['registered_by_oid'] = existing.get('registered_by_oid')
         body['registered_at'] = existing.get('registered_at')
 
-        updated = db_service.update_visit(doc_id, body)
+        try:
+            updated = db_service.update_visit(doc_id, body)
+        except CosmosHttpResponseError as exc:
+            logger.error(f"Cosmos error updating visit {doc_id}: {exc}")
+            return jsonify({'error': 'Kunde inte uppdatera', 'detail': str(exc)}), 500
         if not updated:
             return jsonify({'error': 'Hittades inte'}), 404
 
