@@ -29,6 +29,54 @@ import {
   Save as SaveIcon
 } from '@mui/icons-material';
 
+const StepperInput = ({ label, value, onChange, min = 0, max = 1000, step = 1 }) => {
+  const safeValue = Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
+  const handleChange = (delta) => {
+    const next = Math.min(max, Math.max(min, safeValue + delta));
+    onChange(next);
+  };
+  return (
+    <Stack spacing={0.5}>
+      <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>{label}</Typography>
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          border: 1,
+          borderColor: 'divider',
+          borderRadius: 1.5,
+          px: 1,
+          py: 0.5,
+          backgroundColor: 'background.paper',
+        }}
+      >
+        <IconButton
+          aria-label={`Minska ${label}`}
+          onClick={() => handleChange(-step)}
+          disabled={safeValue <= min}
+          sx={{ border: 1, borderColor: 'divider', mr: 1 }}
+        >
+          -
+        </IconButton>
+        <Typography
+          component="span"
+          sx={{ flex: 1, textAlign: 'center', fontWeight: 700, fontSize: '1.1rem' }}
+        >
+          {safeValue}
+        </Typography>
+        <IconButton
+          aria-label={`Öka ${label}`}
+          onClick={() => handleChange(step)}
+          disabled={safeValue >= max}
+          sx={{ border: 1, borderColor: 'divider', ml: 1 }}
+        >
+          +
+        </IconButton>
+      </Box>
+    </Stack>
+  );
+};
+
 const startOfWeek = (date) => {
   const d = new Date(date);
   const day = d.getDay(); // 0 Sun ... 6 Sat
@@ -175,8 +223,8 @@ const MyRegistrations = () => {
     setSaving(true);
     setError(null);
     try {
-      const parsedDuration = Number(editing.duration_minutes || 0);
-      const safeDuration = Number.isFinite(parsedDuration) && parsedDuration > 0 ? Math.round(parsedDuration) : null;
+      const parsedDuration = Number.isFinite(editing.duration_minutes) ? editing.duration_minutes : 30;
+      const safeDuration = Number.isFinite(parsedDuration) && parsedDuration > 0 ? Math.round(parsedDuration) : 30;
       const payload = {
         ...editing,
         gender_counts: ensureGenderCounts(editing.gender_counts),
@@ -410,21 +458,19 @@ const MyRegistrations = () => {
 
               {editing.visit_type === VISIT_TYPES.GROUP ? (
                 <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-                  <TextField
+                  <StepperInput
                     label="Antal män"
-                    type="number"
                     value={ensureGenderCounts(editing.gender_counts).men}
-                    onChange={(e) => handleEditingGenderChange('men', parseInt(e.target.value || '0', 10))}
-                    inputProps={{ min: 0 }}
-                    fullWidth
+                    onChange={(val) => handleEditingGenderChange('men', val)}
+                    min={0}
+                    max={1000}
                   />
-                  <TextField
+                  <StepperInput
                     label="Antal kvinnor"
-                    type="number"
                     value={ensureGenderCounts(editing.gender_counts).women}
-                    onChange={(e) => handleEditingGenderChange('women', parseInt(e.target.value || '0', 10))}
-                    inputProps={{ min: 0 }}
-                    fullWidth
+                    onChange={(val) => handleEditingGenderChange('women', val)}
+                    min={0}
+                    max={1000}
                   />
                 </Stack>
               ) : (
@@ -478,16 +524,13 @@ const MyRegistrations = () => {
                     renderInput={(params) => <TextField {...params} label="Med vem" required />}
                   />
 
-                  <TextField
+                  <StepperInput
                     label="Varaktighet (minuter)"
-                    type="number"
-                    value={editing.duration_minutes ?? ''}
-                    onChange={(e) => {
-                      const parsed = parseInt(e.target.value || '1', 10);
-                      const safeValue = Number.isNaN(parsed) ? 1 : Math.max(1, parsed);
-                      handleEditingFieldChange('duration_minutes', safeValue);
-                    }}
-                    inputProps={{ min: 1, max: 720 }}
+                    value={editing.duration_minutes ?? 30}
+                    onChange={(val) => handleEditingFieldChange('duration_minutes', val)}
+                    min={1}
+                    max={720}
+                    step={5}
                   />
 
                   <Divider />

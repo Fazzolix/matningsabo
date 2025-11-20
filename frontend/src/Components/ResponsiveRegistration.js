@@ -40,37 +40,67 @@ import {
   useTheme,
 } from '@mui/material';
 import {
-  AccessTime as AccessTimeIcon,
   CalendarToday as CalendarIcon,
   Delete as DeleteIcon,
   Event as EventIcon,
   Group as GroupIcon,
-  Man as ManIcon,
   Person as PersonIcon,
-  Woman as WomanIcon,
+  Remove as RemoveIcon,
+  Add as AddIcon,
 } from '@mui/icons-material';
 
-const NumberInput = ({ label, value, onChange, icon }) => (
-  <TextField
-    type="number"
-    label={label}
-    value={value}
-    onChange={(e) => {
-      const parsed = parseInt(e.target.value || '0', 10);
-      const safeValue = Number.isNaN(parsed) ? 0 : Math.max(0, parsed);
-      onChange(safeValue);
-    }}
-    fullWidth
-    inputProps={{ min: 0 }}
-    InputProps={{
-      startAdornment: icon ? (
-        <InputAdornment position="start">
-          {icon}
-        </InputAdornment>
-      ) : null,
-    }}
-  />
-);
+const StepperInput = ({ label, value, onChange, min = 0, max = 1000, step = 1, helper }) => {
+  const safeValue = Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
+  const handleChange = (delta) => {
+    const next = Math.min(max, Math.max(min, safeValue + delta));
+    onChange(next);
+  };
+  return (
+    <Stack spacing={0.5}>
+      <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>{label}</Typography>
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          border: 1,
+          borderColor: 'divider',
+          borderRadius: 1.5,
+          px: 1,
+          py: 0.5,
+          backgroundColor: 'background.paper',
+        }}
+      >
+        <IconButton
+          aria-label={`Minska ${label}`}
+          onClick={() => handleChange(-step)}
+          disabled={safeValue <= min}
+          sx={{ border: 1, borderColor: 'divider', mr: 1 }}
+        >
+          <RemoveIcon />
+        </IconButton>
+        <Typography
+          component="span"
+          sx={{ flex: 1, textAlign: 'center', fontWeight: 700, fontSize: '1.1rem' }}
+        >
+          {safeValue}
+        </Typography>
+        <IconButton
+          aria-label={`Öka ${label}`}
+          onClick={() => handleChange(step)}
+          disabled={safeValue >= max}
+          sx={{ border: 1, borderColor: 'divider', ml: 1 }}
+        >
+          <AddIcon />
+        </IconButton>
+      </Box>
+      {helper && (
+        <Typography variant="caption" color="text.secondary">
+          {helper}
+        </Typography>
+      )}
+    </Stack>
+  );
+};
 
 const SatisfactionEntry = ({ entry, onChange, onRemove }) => (
   <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
@@ -287,12 +317,6 @@ const ResponsiveRegistration = () => {
       </Typography>
       <form onSubmit={handleSubmit}>
         <Stack spacing={3}>
-          {(error || success) && (
-            <Alert severity={error ? 'error' : 'success'} onClose={() => { setError(null); setSuccess(null); }}>
-              {error || success}
-            </Alert>
-          )}
-
           <Paper elevation={0} sx={{ p: { xs: 2, md: 3 }, border: 1, borderColor: 'divider' }}>
             <Grid container spacing={3}>
               <Grid item xs={12} md={4}>
@@ -364,19 +388,23 @@ const ResponsiveRegistration = () => {
               {formData.visit_type === VISIT_TYPES.GROUP ? (
                 <Grid container spacing={3}>
                   <Grid item xs={12} md={6}>
-                    <NumberInput
+                    <StepperInput
                       label="Antal män"
                       value={formData.gender_counts.men}
                       onChange={(val) => handleGenderCountChange('men', val)}
-                      icon={<ManIcon />}
+                      min={0}
+                      max={1000}
+                      helper="0–1000"
                     />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <NumberInput
+                    <StepperInput
                       label="Antal kvinnor"
                       value={formData.gender_counts.women}
                       onChange={(val) => handleGenderCountChange('women', val)}
-                      icon={<WomanIcon />}
+                      min={0}
+                      max={1000}
+                      helper="0–1000"
                     />
                   </Grid>
                 </Grid>
@@ -483,24 +511,14 @@ const ResponsiveRegistration = () => {
                   )}
                 />
 
-                <TextField
-                  type="number"
+                <StepperInput
                   label="Varaktighet (minuter)"
-                  value={formData.duration_minutes ?? ''}
-                  required
-                  onChange={(e) => {
-                    const parsed = parseInt(e.target.value || '1', 10);
-                    const safeValue = Number.isNaN(parsed) ? 1 : Math.max(1, parsed);
-                    handleFieldChange('duration_minutes', safeValue);
-                  }}
-                  InputProps={{
-                    startAdornment: (
-                      <InputAdornment position="start">
-                        <AccessTimeIcon />
-                      </InputAdornment>
-                    ),
-                    inputProps: { min: 1, max: 720 },
-                  }}
+                  value={formData.duration_minutes ?? 30}
+                  onChange={(val) => handleFieldChange('duration_minutes', val)}
+                  min={1}
+                  max={720}
+                  step={5}
+                  helper="1–720 min"
                 />
 
                 <Divider />
@@ -556,6 +574,11 @@ const ResponsiveRegistration = () => {
 
           <Card elevation={0} sx={{ border: 1, borderColor: 'divider' }}>
             <CardContent>
+              {(error || success) && (
+                <Alert severity={error ? 'error' : 'success'} onClose={() => { setError(null); setSuccess(null); }} sx={{ mb: 2 }}>
+                  {error || success}
+                </Alert>
+              )}
               <Stack
                 direction={{ xs: 'column', md: 'row' }}
                 spacing={3}
