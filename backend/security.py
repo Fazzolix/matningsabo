@@ -265,11 +265,11 @@ def validate_attendance_data(data, home_doc=None, existing_department_id=None):
     if not valid:
         errors.append(error)
 
-    valid, error = validate_gender_counts(data.get('gender_counts', {}), data.get('visit_type'), data.get('offer_status'))
-    if not valid:
-        errors.append(error)
+    valid_gc, gc_error = validate_gender_counts(data.get('gender_counts', {}), data.get('visit_type'), data.get('offer_status'))
+    if not valid_gc:
+        errors.append(gc_error)
     total = 0
-    if valid:
+    if valid_gc:
         total = sum(int(data.get('gender_counts', {}).get(g, 0)) for g in ALLOWED_GENDERS)
 
     if data.get('offer_status') == 'accepted':

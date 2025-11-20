@@ -166,7 +166,7 @@ def add_department(home_id):
         return jsonify(dept), 201
     except Exception as e:
         logger.error(f"Error adding department: {e}")
-        return jsonify({'error': 'Kunde inte lägga till avdelning'}), 500
+        return jsonify({'error': 'Kunde inte lägga till avdelning', 'detail': str(e)}), 500
 
 
 @app.route('/api/aldreboenden/<home_id>/departments/<department_id>', methods=['PUT'])

@@ -204,7 +204,8 @@ class CosmosService:
         doc = self.get_home(home_id)
         if not doc:
             raise ValueError('home_not_found')
-        departments = doc.get('departments') or []
+        departments_value = doc.get('departments')
+        departments = departments_value if isinstance(departments_value, list) else []
         if len(departments) >= MAX_DEPARTMENTS_PER_HOME:
             raise ValueError('max_departments')
         slug = _slugify(name)
@@ -228,6 +229,7 @@ class CosmosService:
             # If the document disappeared between read and write, surface as not found
             if getattr(e, 'status_code', None) == 404:
                 raise ValueError('home_not_found')
+            # Bubble up with context
             raise
         return new_dept
 
