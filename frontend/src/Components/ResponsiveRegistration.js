@@ -91,8 +91,28 @@ const StepperInput = ({ label, value, onChange, min = 0, max = 1000, step = 1 })
           type="number"
           value={safeValue}
           onChange={handleInputChange}
-          inputProps={{ min, max, style: { textAlign: 'center', fontWeight: 700 } }}
-          sx={{ flex: 1, mx: 1 }}
+          variant="standard"
+          InputProps={{
+            disableUnderline: true,
+            inputProps: {
+              min,
+              max,
+              style: { textAlign: 'center', fontWeight: 700 },
+            },
+          }}
+          sx={{
+            flex: 1,
+            mx: 1,
+            '& .MuiInputBase-input': {
+              fontSize: '1.1rem',
+              padding: '6px 0',
+              MozAppearance: 'textfield',
+            },
+            '& input[type=number]::-webkit-outer-spin-button, & input[type=number]::-webkit-inner-spin-button': {
+              WebkitAppearance: 'none',
+              margin: 0,
+            },
+          }}
         />
         <IconButton
           aria-label={`Öka ${label}`}
@@ -464,9 +484,9 @@ const ResponsiveRegistration = () => {
             <Paper elevation={0} sx={{ p: { xs: 2, md: 3 }, border: 1, borderColor: 'divider' }}>
             <Stack spacing={3}>
               <Typography variant="h6" sx={{ fontWeight: 600 }}>Genomförd utevistelse</Typography>
-              <Autocomplete
-                options={activityOptions}
-                getOptionLabel={(option) => option?.name || ''}
+                <Autocomplete
+                  options={activityOptions}
+                  getOptionLabel={(option) => option?.name || ''}
                   isOptionEqualToValue={(option, value) => option.id === value.id}
                   value={activityOptions.find((option) => option.id === formData.activity_id) || null}
                   onChange={(_, newValue) =>
@@ -480,7 +500,6 @@ const ResponsiveRegistration = () => {
                     <TextField
                       {...params}
                       label="Aktivitet"
-                      required
                       InputProps={{
                         ...params.InputProps,
                         startAdornment: (
@@ -512,7 +531,6 @@ const ResponsiveRegistration = () => {
                     <TextField
                       {...params}
                       label="Med vem"
-                      required
                       InputProps={{
                         ...params.InputProps,
                         startAdornment: (
