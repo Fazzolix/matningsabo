@@ -35,6 +35,15 @@ const StepperInput = ({ label, value, onChange, min = 0, max = 1000, step = 1 })
     const next = Math.min(max, Math.max(min, safeValue + delta));
     onChange(next);
   };
+  const handleInputChange = (e) => {
+    const parsed = parseInt(e.target.value, 10);
+    if (Number.isNaN(parsed)) {
+      onChange(min);
+      return;
+    }
+    const clamped = Math.min(max, Math.max(min, parsed));
+    onChange(clamped);
+  };
   return (
     <Stack spacing={0.5}>
       <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>{label}</Typography>
@@ -58,12 +67,13 @@ const StepperInput = ({ label, value, onChange, min = 0, max = 1000, step = 1 })
         >
           -
         </IconButton>
-        <Typography
-          component="span"
-          sx={{ flex: 1, textAlign: 'center', fontWeight: 700, fontSize: '1.1rem' }}
-        >
-          {safeValue}
-        </Typography>
+        <TextField
+          type="number"
+          value={safeValue}
+          onChange={handleInputChange}
+          inputProps={{ min, max, style: { textAlign: 'center', fontWeight: 700 } }}
+          sx={{ flex: 1, mx: 1 }}
+        />
         <IconButton
           aria-label={`Öka ${label}`}
           onClick={() => handleChange(step)}
@@ -326,7 +336,7 @@ const MyRegistrations = () => {
         ...prev,
         satisfaction_entries: [
           ...(prev.satisfaction_entries || []),
-          { gender: 'men', rating: SATISFACTION_MAX },
+          { gender: 'men', rating: 3 },
         ],
       };
     });

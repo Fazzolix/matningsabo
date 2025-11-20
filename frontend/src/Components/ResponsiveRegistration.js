@@ -49,11 +49,20 @@ import {
   Add as AddIcon,
 } from '@mui/icons-material';
 
-const StepperInput = ({ label, value, onChange, min = 0, max = 1000, step = 1, helper }) => {
+const StepperInput = ({ label, value, onChange, min = 0, max = 1000, step = 1 }) => {
   const safeValue = Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
   const handleChange = (delta) => {
     const next = Math.min(max, Math.max(min, safeValue + delta));
     onChange(next);
+  };
+  const handleInputChange = (e) => {
+    const parsed = parseInt(e.target.value, 10);
+    if (Number.isNaN(parsed)) {
+      onChange(min);
+      return;
+    }
+    const clamped = Math.min(max, Math.max(min, parsed));
+    onChange(clamped);
   };
   return (
     <Stack spacing={0.5}>
@@ -78,26 +87,22 @@ const StepperInput = ({ label, value, onChange, min = 0, max = 1000, step = 1, h
         >
           <RemoveIcon />
         </IconButton>
-        <Typography
-          component="span"
-          sx={{ flex: 1, textAlign: 'center', fontWeight: 700, fontSize: '1.1rem' }}
-        >
-          {safeValue}
-        </Typography>
+        <TextField
+          type="number"
+          value={safeValue}
+          onChange={handleInputChange}
+          inputProps={{ min, max, style: { textAlign: 'center', fontWeight: 700 } }}
+          sx={{ flex: 1, mx: 1 }}
+        />
         <IconButton
           aria-label={`Öka ${label}`}
           onClick={() => handleChange(step)}
           disabled={safeValue >= max}
           sx={{ border: 1, borderColor: 'divider', ml: 1 }}
-        >
-          <AddIcon />
-        </IconButton>
-      </Box>
-      {helper && (
-        <Typography variant="caption" color="text.secondary">
-          {helper}
-        </Typography>
-      )}
+      >
+        <AddIcon />
+      </IconButton>
+    </Box>
     </Stack>
   );
 };
@@ -267,6 +272,18 @@ const ResponsiveRegistration = () => {
     setError(null);
     setSuccess(null);
     try {
+      if (formData.offer_status === OFFER_STATUS.ACCEPTED) {
+        if (!formData.activity_id && !formData.activity_name) {
+          setError('Aktivitet krävs när utevistelsen genomförs.');
+          setSubmitting(false);
+          return;
+        }
+        if (!formData.companion_id && !formData.companion_name) {
+          setError('"Med vem" krävs när utevistelsen genomförs.');
+          setSubmitting(false);
+          return;
+        }
+      }
       const payload = {
         ...formData,
         gender_counts: ensureGenderCounts(formData.gender_counts),
@@ -445,11 +462,11 @@ const ResponsiveRegistration = () => {
 
           {formData.offer_status === OFFER_STATUS.ACCEPTED && (
             <Paper elevation={0} sx={{ p: { xs: 2, md: 3 }, border: 1, borderColor: 'divider' }}>
-              <Stack spacing={3}>
-                <Typography variant="h6" sx={{ fontWeight: 600 }}>Genomförd utevistelse</Typography>
-                <Autocomplete
-                  options={activityOptions}
-                  getOptionLabel={(option) => option?.name || ''}
+            <Stack spacing={3}>
+              <Typography variant="h6" sx={{ fontWeight: 600 }}>Genomförd utevistelse</Typography>
+              <Autocomplete
+                options={activityOptions}
+                getOptionLabel={(option) => option?.name || ''}
                   isOptionEqualToValue={(option, value) => option.id === value.id}
                   value={activityOptions.find((option) => option.id === formData.activity_id) || null}
                   onChange={(_, newValue) =>
@@ -561,7 +578,7 @@ const ResponsiveRegistration = () => {
                       ...prev,
                       satisfaction_entries: [
                         ...prev.satisfaction_entries,
-                        { gender: 'men', rating: SATISFACTION_MAX },
+                        { gender: 'men', rating: 3 },
                       ],
                     }));
                   }}>
